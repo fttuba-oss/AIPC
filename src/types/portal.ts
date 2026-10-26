@@ -130,3 +130,121 @@ export interface ParsedScore {
   }[];
   selectedPartId: string;
 }
+
+export interface StudentProfile {
+  id: string;
+  name: string;
+  instrument: string;
+  grade?: string;
+  avatarUrl?: string;
+}
+
+export interface StoredExercise {
+  id: string;
+  title: string;
+  scoreTitle: string;
+  scorePath: string;
+  instrumentId: string;
+  instrumentName: string;
+  studentId: string;
+  studentName: string;
+  assignedDate: string;
+  status: 'assigned' | 'in_progress' | 'completed';
+  section: {
+    id?: string;
+    sectionNumber: number;
+    title: string;
+    startMeasure: number;
+    endMeasure: number;
+    goals: {
+      areaId?: string;
+      category: string;
+      measureRange: string;
+      startMeasure: number;
+      endMeasure: number;
+      goal: string;
+      targetTempo?: number;
+      teacherNote?: string;
+    }[];
+  };
+  teacherGeneralNotes?: string;
+}
+
+/** A score in the teacher's library (the main asset exercises are created from). */
+export interface LibraryScore {
+  id: string;
+  title: string;
+  composer?: string;
+  fileName?: string;
+  /** URL the score XML can be fetched from (public path or storage API). */
+  xmlPath: string;
+  builtin?: boolean;
+  uploadedAt: string;
+}
+
+export type ExerciseType = 'score_following' | 'rhythm';
+export type RhythmKind = 'syncopation' | 'cross_rhythm' | 'other';
+
+/** An exercise defined by the teacher on a score, before it is sent to students. */
+export interface ExerciseTemplate {
+  id: string;
+  scoreId: string;
+  type: ExerciseType;
+  title: string;
+  startMeasure: number;
+  endMeasure: number;
+  tempo: number;
+  rhythmKind?: RhythmKind;
+  /** Score parts (instruments) in which the tricky rhythm occurs. */
+  parts: string[];
+  notes: string;
+  suggested: boolean;
+  createdAt: string;
+}
+
+/** Free-text practice plan message for students. */
+export interface PlanNote {
+  id: string;
+  date: string;
+  scoreId?: string;
+  scoreTitle?: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface StoredSubmissionTake {
+  id: string;
+  takeNumber: number;
+  timestamp: string;
+  mode: 'audio' | 'video';
+  mediaFile: string;
+  durationSeconds: number;
+  tempoUsed: number;
+  selfRating?: number;
+}
+
+export interface StoredSubmission {
+  id: string;
+  exerciseId: string;
+  sessionId: string;
+  studentId: string;
+  studentName: string;
+  pieceName: string;
+  instrumentName: string;
+  submittedAt: string;
+  sectionId: string;
+  sectionName: string;
+  measureRange: [number, number];
+  timeSpentSeconds: number;
+  takes: StoredSubmissionTake[];
+  diagnosticResult?: {
+    overallAccuracyPercent: number;
+    summaryText: string;
+    problemMeasureNumbers: number[];
+    rushedCount: number;
+    draggedCount: number;
+    stableCount: number;
+  };
+  teacherFeedback?: string;
+}
+

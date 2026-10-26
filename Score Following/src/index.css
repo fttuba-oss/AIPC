@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand: #e85d75;
+  --color-brand-hover: #ef6e84;
+  --color-brand-bg: rgba(232, 93, 117, 0.08);
+  --color-brand-border: rgba(232, 93, 117, 0.18);
+  
+  --color-panel: #12111a;
+  --color-panel-light: #1c1926;
+  --color-bg-dark: #0a090f;
+  --color-bg-light: #16151f;
+  
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #8e8a9f;
+  --color-text-muted: #535065;
+}
+
+/* Custom styles for sheet music and interactive scrollbars */
+.osmd-container svg {
+  width: 100% !important;
+  height: auto !important;
+}
+
+/* Hide OSMD's built-in cursor img — we render our own custom overlay div instead */
+img[id^="cursorImg"] {
+  display: none !important;
+}
+
+/* Clean UI panels */
+.clean-panel {
+  background-color: var(--color-panel);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 1.25rem; /* 20px */
+}
+
+/* Sleek custom scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-panel-light);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Custom slider range styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  background: #1c1926;
+  height: 6px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px; /* centers thumb on track */
+  background-color: var(--color-brand);
+  height: 16px;
+  width: 16px;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background-color: var(--color-brand-hover);
+  transform: scale(1.1);
+}
+
+input[type="range"]::-moz-range-track {
+  background: #1c1926;
+  height: 6px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+input[type="range"]::-moz-range-thumb {
+  background-color: var(--color-brand);
+  height: 16px;
+  width: 16px;
+  border: none;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  background-color: var(--color-brand-hover);
+  transform: scale(1.1);
+}
+
+/* Hide scrollbars for clean presentation */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+

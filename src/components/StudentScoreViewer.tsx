@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { trackerPositionAt, type TrackerAnchor } from '../utils/scoreTracker';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import { ZoomIn, ZoomOut, Target, Layers } from 'lucide-react';
 import {
@@ -20,8 +21,15 @@ interface StudentScoreViewerProps {
   instrumentPartName?: string;
   playbackProgress?: number; // Current playback time in score seconds
   isPlaying?: boolean;
+  getPlaybackTime?: () => number | null;
   viewMode?: 'focus' | 'full';
   onViewModeChange?: (mode: 'focus' | 'full') => void;
+  highlightedPartName?: string;
+  hiddenInstrumentNames?: string[];
+  /** Staves to draw, by part id (null/undefined = every part). */
+  visiblePartIds?: string[] | null;
+  /** The part the student is practising (drives target notes and evaluation). */
+  instrumentPartId?: string | null;
   noteEvaluations?: Record<number, 'Perfect' | 'Great' | 'Good' | 'Early' | 'Late' | 'Miss'>;
   problemMeasures?: number[];
   onClearEvaluations?: () => void;
@@ -31,6 +39,13 @@ interface StudentScoreViewerProps {
   onSeek?: (seconds: number, beat?: number, measureNumber?: number) => void;
 }
 
+/** Show only the chosen parts' staves (all of them when ids is null or matches nothing). */
+function applyVisibleParts(osmd: OpenSheetMusicDisplay, ids: string[] | null | undefined) {
+  const instruments = osmd.Sheet?.Instruments;
+  if (!instruments) return;
+  const matches = ids ? instruments.filter((i: any) => ids.includes(String(i.IdString ?? i.Id))) : [];
+  instruments.forEach((i: any) => { i.Visible = !ids || matches.length === 0 ? true : matches.includes(i); });
+}
 export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   xmlUrl,
   xmlContent,
@@ -39,11 +54,16 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   sectionStartMeasure = startMeasure,
   sectionEndMeasure = endMeasure,
   totalMeasures,
-  instrumentPartName = 'Trumpet 1',
+  instrumentPartName = 'Flute 2',
   playbackProgress = 0,
   isPlaying = false,
+  getPlaybackTime,
   viewMode: propViewMode,
   onViewModeChange,
+  highlightedPartName,
+  hiddenInstrumentNames = [],
+  visiblePartIds = null,
+  instrumentPartId = null,
   noteEvaluations,
   problemMeasures = [],
   onClearEvaluations,
@@ -57,10 +77,12 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   const customCursorRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
 
-  const [zoom, setZoom] = useState<number>(1.1);
+  const [zoom, setZoom] = useState<number>(0.90);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [scoreData, setScoreData] = useState<ScorePlaybackData | null>(null);
+  const visiblePartsRef = useRef<string[] | null>(visiblePartIds);
+  visiblePartsRef.current = visiblePartIds;
   
   // Active activeViewMode: controlled prop or internal fallback
   const [internalViewMode, setInternalViewMode] = useState<'focus' | 'full'>('focus');
@@ -72,62 +94,112 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
 
   const cursorBeatRef = useRef<number>(-1);
   const cachedNotesRef = useRef<any[]>([]);
-  const lastActivePartYRef = useRef<number | null>(null);
+  const trackerAnchorsRef = useRef<TrackerAnchor[]>([]);
+  const playbackRef = useRef({ playbackProgress, getPlaybackTime });
+  playbackRef.current = { playbackProgress, getPlaybackTime };
+  const lastTrackerSystemRef = useRef<number | null>(null);
 
-  /**
-   * Position the glowing custom tracker overlay over the current notehead
-   */
-  const positionCustomCursor = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const cursorEl = customCursorRef.current;
-    if (!cursorEl || !osmd.cursor || !wrapperRef.current) return;
-
-    cursorEl.style.display = 'block';
-
-    const gNotes = osmd.cursor.GNotesUnderCursor?.();
-    const wrapRect = wrapperRef.current.getBoundingClientRect();
-
-    if (gNotes && gNotes.length > 0) {
-      const activeNote = gNotes[0] as any;
-      let noteheadEls: HTMLElement[] | null = null;
-      try {
-        noteheadEls = activeNote.getNoteheadSVGs?.();
-      } catch {
-        // ignore
-      }
-
-      if (!noteheadEls || noteheadEls.length === 0) {
-        try {
-          const g = activeNote.getSVGGElement?.() as SVGGElement | null;
-          if (g) noteheadEls = [g as unknown as HTMLElement];
-        } catch {
-          // ignore
+  const drawTracker = useCallback((beat: number, follow = false) => {
+    const el = customCursorRef.current;
+    const position = trackerPositionAt(trackerAnchorsRef.current, beat);
+    if (!el || !position) return;
+    el.style.display = 'block';
+    el.style.transform = `translate3d(${position.x}px, ${position.top}px, 0)`;
+    el.style.height = `${position.height}px`;
+    if (follow && lastTrackerSystemRef.current !== position.system && wrapperRef.current) {
+      // Scroll only when entering a system; never restart a smooth scroll every frame.
+      let viewport = wrapperRef.current.parentElement;
+      while (viewport && !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)) viewport = viewport.parentElement;
+      if (viewport) {
+        const y = wrapperRef.current.getBoundingClientRect().top + position.top;
+        const box = viewport.getBoundingClientRect();
+        if (y < box.top + 16 || y + position.height > box.bottom - 24) {
+          viewport.scrollTo({ top: viewport.scrollTop + y - box.top - 48,
+            behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
         }
       }
-
-      if (noteheadEls && noteheadEls.length > 0) {
-        const noteRect = noteheadEls[0].getBoundingClientRect();
-        const left = noteRect.left - wrapRect.left - 8;
-        const top = (noteRect.top - wrapRect.top) + noteRect.height / 2 - 28;
-
-        lastActivePartYRef.current = top;
-
-        cursorEl.style.left = `${left}px`;
-        cursorEl.style.top = `${top}px`;
-        cursorEl.style.display = 'block';
-        return;
-      }
     }
-
-    // Fallback using OSMD's internal cursor element
-    const cursorBbox = (osmd.cursor as any).cursorElement?.getBoundingClientRect();
-    if (cursorBbox && cursorBbox.width > 0) {
-      const left = cursorBbox.left - wrapRect.left - 4;
-      const top = lastActivePartYRef.current !== null ? lastActivePartYRef.current : (cursorBbox.top - wrapRect.top);
-      cursorEl.style.left = `${left}px`;
-      cursorEl.style.top = `${top}px`;
-      cursorEl.style.display = 'block';
-    }
+    lastTrackerSystemRef.current = position.system;
   }, []);
+
+  /** Cache engraving geometry after layout; the animation loop performs no SVG measurements. */
+  const rebuildTrackerAnchors = useCallback(() => {
+    const osmd = osmdRef.current;
+    const wrapper = wrapperRef.current;
+    const container = containerRef.current;
+    if (!osmd || !wrapper || !container) return;
+    const wrap = wrapper.getBoundingClientRect();
+    const svgs = Array.from(container.querySelectorAll('svg'));
+    const systems = new Map<object, number>();
+    const rows: { beat: number; endBeat: number; right: number; top: number; height: number; system: number; entries: { beat: number; x: number }[] }[] = [];
+    for (const measureRow of osmd.GraphicSheet?.MeasureList || []) {
+      const visible = measureRow.filter((m: any) => m && m.getVFStave?.()?.width > 0);
+      if (!visible.length) continue;
+      const first: any = visible[0];
+      const source = osmd.Sheet.SourceMeasures.find(m => m.MeasureNumber === first.MeasureNumber);
+      const system = first.ParentMusicSystem;
+      const pageNumber = system.Parent?.PageNumber || 1;
+      const svg = svgs[pageNumber - 1] || svgs[0];
+      const matrix = svg?.getScreenCTM();
+      if (!source || !matrix) continue;
+      if (!systems.has(system)) systems.set(system, systems.size);
+      const project = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(matrix);
+      let top = Infinity, bottom = -Infinity, right = -Infinity;
+      const entries = new Map<number, number>();
+      for (const m of visible as any[]) {
+        const stave = m.getVFStave();
+        top = Math.min(top, project(stave.x, stave.getYForLine(0)).y - wrap.top - 12);
+        bottom = Math.max(bottom, project(stave.x, stave.getYForLine(4)).y - wrap.top + 12);
+        right = Math.max(right, project(stave.x + stave.width - 3, stave.y).x - wrap.left);
+        for (const se of m.staffEntries || []) {
+          const beat = se.getAbsoluteTimestamp().RealValue * 4;
+          let x = project(se.PositionAndShape.AbsolutePosition.x * 10, 0).x - wrap.left;
+          // Prefer the actual notehead centre; rests fall back to the staff-entry coordinate.
+          for (const voice of se.graphicalVoiceEntries || []) {
+            let found = false;
+            for (const note of voice.notes || []) {
+              try {
+                const head = note.getNoteheadSVGs?.()?.[0];
+                const rect = head?.getBoundingClientRect();
+                if (rect?.width) { x = rect.left - wrap.left + rect.width / 2; found = true; break; }
+              } catch { /* Rest or unrendered note: use the graphical staff entry. */ }
+            }
+            if (found) break;
+          }
+          if (!entries.has(beat)) entries.set(beat, x);
+        }
+      }
+      if (!Number.isFinite(top) || !entries.size) continue;
+      rows.push({ beat: source.AbsoluteTimestamp.RealValue * 4,
+        endBeat: (source.AbsoluteTimestamp.RealValue + source.Duration.RealValue) * 4,
+        right, top, height: bottom - top, system: systems.get(system)!,
+        entries: Array.from(entries, ([beat, x]) => ({ beat, x })).sort((a, b) => a.beat - b.beat) });
+    }
+    const anchors: TrackerAnchor[] = [];
+    rows.forEach((row, i) => {
+      const geometry = { top: row.top, height: row.height, system: row.system };
+      row.entries.forEach(entry => anchors.push({ ...geometry, ...entry }));
+      // Sustain to the end of a system before moving to the next line at the exact beat.
+      if (!rows[i + 1] || rows[i + 1].system !== row.system) {
+        anchors.push({ ...geometry, beat: row.endBeat, x: row.right });
+      }
+    });
+    trackerAnchorsRef.current = anchors.sort((a, b) => a.beat - b.beat);
+    const data = playbackRef.current;
+    const seconds = data.getPlaybackTime?.() ?? data.playbackProgress;
+    drawTracker(seconds < 0
+      ? (scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
+      : secondsToBeats(seconds, scoreData?.tempos || []));
+  }, [drawTracker, scoreData, startMeasure]);
+
+  // Retain click/seek integration without showing OSMD's separate cursor.
+  const positionCustomCursor = useCallback((osmd: OpenSheetMusicDisplay, isIdle = false) => {
+    osmd.cursor?.hide();
+    const beat = isIdle
+      ? (scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
+      : ((osmd.cursor?.Iterator.CurrentSourceTimestamp?.RealValue ?? 0) * 4);
+    drawTracker(beat);
+  }, [drawTracker, scoreData, startMeasure]);
 
   /**
    * Cache rendered graphical note references filtered to the active measure range.
@@ -170,29 +242,18 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
    */
   const pointCursorToSectionStart = useCallback((osmd: OpenSheetMusicDisplay, currentScoreData: ScorePlaybackData | null, targetMeasureOverride?: number) => {
     if (!osmd.cursor) return;
-    osmd.cursor.show();
+    osmd.cursor.hide();
     osmd.cursor.reset();
 
     const isFull = activeViewMode === 'full';
     const isFocus = activeViewMode === 'focus' || isCoachModeActive;
 
-    // In focus mode without an explicit target bar override, osmd.cursor.reset() is already
-    // positioned at the very first note of the focused section.
-    if (isFocus && !targetMeasureOverride) {
-      cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-      osmd.cursor.update();
-      positionCustomCursor(osmd);
-      return;
-    }
-
-    const measureStartBeats = currentScoreData?.measureStartBeats || [];
-    const targetM = targetMeasureOverride ?? (isFull ? 1 : startMeasure);
-    const targetStartBeat = currentScoreData?.measureStartBeatByNumber?.[targetM] ?? measureStartBeats[targetM - 1] ?? ((targetM - 1) * 4);
+    const targetM = targetMeasureOverride ?? startMeasure;
 
     let safety = 0;
-    while (safety < 3000 && !osmd.cursor.Iterator.EndReached) {
-      const currentBeat = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-      if (currentBeat >= targetStartBeat - 0.01) {
+    while (safety < 50000 && !osmd.cursor.Iterator.EndReached) {
+      const curM = osmd.cursor.Iterator.CurrentMeasure?.MeasureNumber;
+      if (curM !== undefined && curM >= targetM) {
         break;
       }
       osmd.cursor.next();
@@ -200,8 +261,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     }
     cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
     osmd.cursor.update();
-    positionCustomCursor(osmd);
-  }, [activeViewMode, isCoachModeActive, startMeasure, positionCustomCursor]);
+    positionCustomCursor(osmd, true);
+  }, [startMeasure, positionCustomCursor]);
 
   // 1. Initialize and render OSMD
   useEffect(() => {
@@ -217,23 +278,37 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     const osmd = new OpenSheetMusicDisplay(containerRef.current, {
       autoResize: true,
       backend: 'svg',
-      drawTitle: activeViewMode === 'full',
+      drawTitle: false,
       drawSubtitle: false,
       drawComposer: false,
       drawLyricist: false,
       drawPartNames: true,
       drawMetronomeMarks: true,
+      newSystemFromXML: true,
+      newSystemFromNewPageInXML: true,
       autoBeam: true,
-      followCursor: true,
+      followCursor: false,
       cursorsOptions: [{
         type: 0, // standard vertical line
-        color: '#f59e0b', // amber cursor
-        alpha: 0.85,
-        follow: true,
+        color: '#0071e3', // OSMD cursor stays hidden; one custom tracker is drawn
+        alpha: 0,
+        follow: false,
       }],
     });
 
-    // Apply strict engraving rules for accurate tuplet rendering
+    // Apply strict engraving rules for accurate tuplet rendering and system line breaks
+    osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
+    osmd.EngravingRules.NewSystemAtXMLNewPageAttribute = true;
+    osmd.EngravingRules.StretchLastSystemLine = true;
+    osmd.EngravingRules.PageTopMargin = 0;
+    (window as any).osmd = osmd;
+    osmd.EngravingRules.PageBottomMargin = 0;
+    osmd.EngravingRules.PageLeftMargin = 4;
+    osmd.EngravingRules.PageRightMargin = 4;
+    osmd.EngravingRules.MinimumDistanceBetweenSystems = 2.8;
+    osmd.EngravingRules.MinSkyBottomDistBetweenSystems = 1.8;
+    osmd.EngravingRules.StaffDistance = 4.8;
+    osmd.EngravingRules.BetweenStaffDistance = 3.6;
     osmd.EngravingRules.TupletNumberLimitConsecutiveRepetitions = false;
     osmd.EngravingRules.TupletNumberAlwaysDisableAfterFirstMax = false;
     osmd.EngravingRules.TupletNumberUseShowNoneXMLValue = false;
@@ -257,14 +332,16 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     loadXml()
       .then(async (xmlText) => {
         if (!isMounted) return;
-        await osmd.load(xmlText);
+        await osmd.load(xmlText.replace(/&amp;amp;/g, '&amp;'));
         osmd.zoom = zoom;
+        applyVisibleParts(osmd, visiblePartsRef.current);
 
         // 1. First ensure OSMD is configured with full bounds so we parse the entire piece
         osmd.setOptions({
           drawFromMeasureNumber: 1,
           drawUpToMeasureNumber: Number.MAX_SAFE_INTEGER,
-          drawTitle: activeViewMode === 'full',
+          drawTitle: false,
+          newSystemFromXML: true,
         });
         (osmd as any).rules.MinMeasureToDrawNumber = 1;
         (osmd as any).rules.MinMeasureToDrawIndex = 0;
@@ -298,6 +375,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
             drawFromMeasureNumber: startMeasure,
             drawUpToMeasureNumber: endMeasure,
             drawTitle: false,
+            newSystemFromXML: true,
           });
           (osmd as any).rules.MinMeasureToDrawNumber = startMeasure;
           (osmd as any).rules.MinMeasureToDrawIndex = minIdx;
@@ -310,7 +388,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         if (osmd.cursor) {
           setTimeout(() => {
             if (osmdRef.current) {
-              pointCursorToSectionStart(osmdRef.current, parsed);
+              pointCursorToSectionStart(osmdRef.current, parsed, startMeasure);
             }
           }, 150);
         }
@@ -338,6 +416,20 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     };
   }, [xmlUrl, xmlContent]);
 
+  // Part visibility changed (the student ticked/unticked an eye): redraw with those staves only
+  const visibleKey = visiblePartIds ? visiblePartIds.join('|') : '*';
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    if (!osmd || !isLoaded) return;
+    try {
+      applyVisibleParts(osmd, visiblePartsRef.current);
+      osmd.render();
+      refreshCachedNoteheads();
+    } catch (e) {
+      console.warn('[StudentScoreViewer] Could not apply part visibility:', e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, isLoaded]);
   // 2. Measure range and View Mode updates (Brings up the targeted bars immediately!)
   useEffect(() => {
     const osmd = osmdRef.current;
@@ -365,6 +457,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         drawFromMeasureNumber: 1,
         drawUpToMeasureNumber: Number.MAX_SAFE_INTEGER,
         drawTitle: true,
+        drawSubtitle: true,
+        drawComposer: true,
       });
       (osmd as any).rules.MinMeasureToDrawNumber = 1;
       (osmd as any).rules.MinMeasureToDrawIndex = 0;
@@ -375,7 +469,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     try {
       osmd.render();
       refreshCachedNoteheads();
-      pointCursorToSectionStart(osmd, scoreData);
+      pointCursorToSectionStart(osmd, scoreData, startMeasure);
     } catch (e) {
       console.warn('[StudentScoreViewer] Re-render error on section update:', e);
     }
@@ -393,158 +487,43 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     }
   }, [zoom, isLoaded, refreshCachedNoteheads, positionCustomCursor]);
 
-  // 4. Synchronize cursor with playback
+  // Rebuild cached coordinates after notation, zoom, visibility or container-size changes.
   useEffect(() => {
-    const osmd = osmdRef.current;
-    if (!osmd || !scoreData || !osmd.cursor || !isLoaded) return;
+    if (!isLoaded) return;
+    let pending = 0;
+    const schedule = () => {
+      cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(rebuildTrackerAnchors);
+    };
+    const resize = new ResizeObserver(schedule);
+    if (wrapperRef.current) resize.observe(wrapperRef.current);
+    const mutations = new MutationObserver(schedule);
+    if (containerRef.current) mutations.observe(containerRef.current, { childList: true, subtree: true });
+    schedule();
+    return () => { cancelAnimationFrame(pending); resize.disconnect(); mutations.disconnect(); };
+  }, [isLoaded, zoom, visibleKey, activeViewMode, endMeasure, rebuildTrackerAnchors]);
 
-    // During count-in, playbackProgress is negative (e.g. -4, -3, -2, -1 s).
-    // Ensure the tracker is immediately rewound to the start of the section and stays there during count-in!
-    if (playbackProgress < 0) {
-      pointCursorToSectionStart(osmd, scoreData);
-      return;
-    }
-
-    if (!isPlaying && playbackProgress === 0 && (!noteEvaluations || Object.keys(noteEvaluations).length === 0)) {
-      pointCursorToSectionStart(osmd, scoreData);
-      return;
-    }
-
-    // Convert transport playbackProgress seconds to score quarter-note beats
-    const targetBeat = secondsToBeats(playbackProgress, scoreData.tempos);
-
-    // Seek backward: reset cursor to beginning of active section view
-    if (targetBeat < cursorBeatRef.current - 0.05) {
-      pointCursorToSectionStart(osmd, scoreData);
-    }
-
-    // Advance forward: step until next visible beat would overshoot
-    let safety = 0;
-    while (safety < 3000 && !osmd.cursor.Iterator.EndReached) {
-      const peek = osmd.cursor.Iterator.clone();
-      peek.moveToNextVisibleVoiceEntry(false);
-      const nextBeat = (peek.CurrentSourceTimestamp?.RealValue ?? (peek as any).currentTimeStamp?.RealValue ?? 99999) * 4;
-
-      if (nextBeat <= targetBeat + 0.02) {
-        osmd.cursor.next();
-        cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-        safety++;
-      } else {
-        break;
-      }
-    }
-
-    osmd.cursor.update();
-    positionCustomCursor(osmd);
-  }, [playbackProgress, isPlaying, scoreData, isLoaded, pointCursorToSectionStart, positionCustomCursor, noteEvaluations]);
-
-  // 5. Notehead coloring and halos
+  // One animation loop reads the audio clock directly, independent of React's update cadence.
   useEffect(() => {
-    let notes = cachedNotesRef.current;
-    const svgRoot = containerRef.current?.querySelector('svg');
-    if (!svgRoot) return;
+    if (!isLoaded || !scoreData) return;
+    let frame = 0;
+    const tick = () => {
+      const data = playbackRef.current;
+      const seconds = data.getPlaybackTime?.() ?? data.playbackProgress;
+      const beat = seconds < 0
+        ? (scoreData.measureStartBeatByNumber?.[startMeasure] ?? scoreData.measureStartBeats[startMeasure - 1] ?? 0)
+        : secondsToBeats(seconds, scoreData.tempos);
+      drawTracker(beat, isPlaying && seconds >= 0);
+      if (isPlaying) frame = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(frame);
+  }, [isPlaying, isLoaded, scoreData, startMeasure, drawTracker]);
 
-    const existingOverlay = svgRoot.querySelector('#coach-note-overlays');
-    if (existingOverlay) {
-      existingOverlay.remove();
-    }
-    const existingBadges = svgRoot.querySelector('#coach-state-badges');
-    if (existingBadges) {
-      existingBadges.remove();
-    }
-
-    if (!notes || notes.length === 0) {
-      refreshCachedNoteheads();
-      notes = cachedNotesRef.current;
-    }
-    console.log('[StudentScoreViewer noteEvaluations effect]', {
-      cachedNotesCount: notes?.length,
-      noteEvaluations,
-      hasSvgRoot: !!svgRoot,
-      startMeasure,
-      endMeasure,
-    });
-
-    if (!notes || notes.length === 0) return;
-
-    // Clean up any existing halos across the SVG
-    svgRoot.querySelectorAll('.coach-note-halo').forEach(el => el.remove());
-
-    const { targetNotes } = getTargetPartAndNotes(scoreData, instrumentPartName, [startMeasure, endMeasure]);
-
-    notes.forEach((gn: any, idx: number) => {
-      let evalKey = idx;
-      if (targetNotes.length > 0 && gn?.sourceNote) {
-        const gnBeat = (gn.sourceNote.getAbsoluteTimestamp?.()?.RealValue ?? 0) * 4;
-        const foundIdx = targetNotes.findIndex(
-          tn => gnBeat >= tn.beat - 0.05 && gnBeat < tn.beat + (tn.durationBeats || 0.25) - 0.05
-        );
-        if (foundIdx !== -1) {
-          evalKey = foundIdx;
-        }
-      }
-
-      const rating = noteEvaluations ? noteEvaluations[evalKey] : undefined;
-
-      let color = '';
-      if (rating === 'Perfect' || rating === 'Great' || rating === 'Good') {
-        color = '#10b981'; // Emerald Green (On Time)
-      } else if (rating === 'Early' || rating === 'Late') {
-        color = '#f59e0b'; // Amber (Early / Late)
-      } else if (rating === 'Miss') {
-        color = '#ef4444'; // Red (Missed)
-      }
-
-      // 1. Built-in OSMD note coloring method
-      if (typeof gn.setColor === 'function') {
-        try {
-          gn.setColor(color || '#000000');
-        } catch {
-          // ignore
-        }
-      }
-
-      // 2. Direct SVG coloring for notehead, stem, and accidental paths
-      const vfEl = typeof gn.getSVGGElement === 'function' ? gn.getSVGGElement() : null;
-      if (vfEl) {
-        try {
-          const targetFill = color || '#000000';
-          vfEl.querySelectorAll('path').forEach((p: Element) => {
-            p.setAttribute('fill', targetFill);
-            (p as any).style.fill = targetFill;
-          });
-        } catch {
-          // ignore
-        }
-
-        // 3. Glowing halo badge directly behind the notehead inside vfEl
-        if (color) {
-          try {
-            const noteheadEl = vfEl.querySelector('.vf-notehead') || vfEl;
-            const bbox = (noteheadEl as SVGGraphicsElement)?.getBBox?.() || vfEl.getBBox?.();
-
-            if (bbox && bbox.width > 0 && bbox.height > 0) {
-              const pad = 4;
-              const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-              rect.setAttribute('class', 'coach-note-halo');
-              rect.setAttribute('x', String(bbox.x - pad));
-              rect.setAttribute('y', String(bbox.y - pad));
-              rect.setAttribute('width', String(bbox.width + (pad * 2)));
-              rect.setAttribute('height', String(bbox.height + (pad * 2)));
-              rect.setAttribute('rx', '8');
-              rect.setAttribute('fill', color);
-              rect.setAttribute('fill-opacity', '0.35');
-              rect.setAttribute('stroke', color);
-              rect.setAttribute('stroke-width', '2');
-              vfEl.insertBefore(rect, vfEl.firstChild);
-            }
-          } catch {
-            // ignore
-          }
-        }
-      }
-    });
-  }, [noteEvaluations, isCoachModeActive, refreshCachedNoteheads, scoreData, instrumentPartName, startMeasure, endMeasure]);
+  // Idle seeks and a stopped transport should update immediately and remain motionless.
+  useEffect(() => {
+    if (!isPlaying && scoreData) drawTracker(secondsToBeats(Math.max(0, playbackProgress), scoreData.tempos));
+  }, [playbackProgress, isPlaying, scoreData, drawTracker]);
 
   /**
    * Click handler on sheet music to jump playhead
@@ -553,14 +532,37 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     const osmd = osmdRef.current;
     if (!osmd || !osmd.GraphicSheet || !scoreData || !onSeek) return;
 
-    const svgElement = containerRef.current?.querySelector('svg');
-    if (!svgElement) return;
+    // Find the specific SVG element clicked (supporting multi-page scores and margin clicks)
+    let targetSvg = (event.target as HTMLElement | SVGElement)?.closest('svg');
+    const allSvgs = Array.from(containerRef.current?.querySelectorAll('svg') || []);
 
-    const pt = svgElement.createSVGPoint();
+    if (!targetSvg && allSvgs.length > 0) {
+      let closestDist = Infinity;
+      for (const svg of allSvgs) {
+        const rect = svg.getBoundingClientRect();
+        if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
+          targetSvg = svg;
+          break;
+        }
+        const dist = Math.min(Math.abs(event.clientY - rect.top), Math.abs(event.clientY - rect.bottom));
+        if (dist < closestDist) {
+          closestDist = dist;
+          targetSvg = svg;
+        }
+      }
+    }
+    if (!targetSvg) targetSvg = containerRef.current?.querySelector('svg') || null;
+    if (!targetSvg) return;
+
+    const clickedPageIndex = allSvgs.indexOf(targetSvg);
+    const clickedPageNumber = clickedPageIndex >= 0 ? clickedPageIndex + 1 : 1;
+
+    const pt = targetSvg.createSVGPoint();
     pt.x = event.clientX;
     pt.y = event.clientY;
 
-    const ctm = svgElement.getScreenCTM();
+    const svgRect = targetSvg.getBoundingClientRect();
+    const ctm = targetSvg.getScreenCTM();
     if (!ctm) return;
 
     const transformed = pt.matrixTransform(ctm.inverse());
@@ -572,8 +574,17 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     const measureList = osmd.GraphicSheet.MeasureList;
     if (!measureList) return;
 
-    const uip = 10 * (osmd as any).zoom;
+    const uip = 10 * ((osmd as any).zoom || 1.0);
     let clickedMeasureNumber = -1;
+
+    interface CandidateMeasure {
+      measureNumber: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+    const candidates: CandidateMeasure[] = [];
 
     for (let i = 0; i < measureList.length; i++) {
       const measureArray = measureList[i];
@@ -582,25 +593,72 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       for (let j = 0; j < measureArray.length; j++) {
         const gm = measureArray[j];
         if (!gm) continue;
+        const isVis = typeof gm.isVisible === 'function' ? gm.isVisible() : true;
+        if (!isVis) continue;
+        const pageNum = (gm as any).ParentMusicSystem?.ParentPage?.PageNumber || (gm as any).ParentMusicSystem?.Parent?.PageNumber;
+        if (pageNum !== undefined && pageNum !== clickedPageNumber) continue;
 
-        const bbox = (gm as any).boundingBox;
-        if (!bbox) continue;
+        const mNum = gm.parentSourceMeasure?.MeasureNumber ?? gm.MeasureNumber;
+        const vfStave = (gm as any).getVFStave?.();
 
-        const absX = bbox.absolutePosition.x * uip;
-        const absY = (bbox.absolutePosition.y - 2) * uip;
-        const width = bbox.Size.width * uip;
-        const height = (bbox.Size.height + 4) * uip;
-
-        if (clickX >= absX && clickX <= absX + width && clickY >= absY && clickY <= absY + height) {
-          if (gm.parentSourceMeasure) {
-            clickedMeasureNumber = gm.parentSourceMeasure.MeasureNumber;
-          } else {
-            clickedMeasureNumber = gm.MeasureNumber;
+        if (vfStave && typeof vfStave.x === 'number' && typeof vfStave.y === 'number') {
+          candidates.push({
+            measureNumber: mNum,
+            x: vfStave.x,
+            y: vfStave.y,
+            width: vfStave.width,
+            height: vfStave.height || 50,
+          });
+        } else {
+          const ps = (gm as any).PositionAndShape;
+          if (ps && ps.AbsolutePosition && ps.Size) {
+            candidates.push({
+              measureNumber: mNum,
+              x: ps.AbsolutePosition.x * uip,
+              y: ps.AbsolutePosition.y * uip,
+              width: ps.Size.width * uip,
+              height: ps.Size.height * uip,
+            });
           }
-          break;
         }
       }
-      if (clickedMeasureNumber !== -1) break;
+    }
+
+    // 1. Direct hit-test against candidate staves with vertical padding for note stems, accidentals & ledger lines
+    for (const c of candidates) {
+      if (clickX >= c.x - 2 && clickX <= c.x + c.width + 2 && clickY >= c.y - 35 && clickY <= c.y + c.height + 35) {
+        clickedMeasureNumber = c.measureNumber;
+        break;
+      }
+    }
+
+    // 2. System horizontal span fallback (for clicks in inter-system margins)
+    if (clickedMeasureNumber === -1) {
+      let bestDistY = Infinity;
+      for (const c of candidates) {
+        if (clickX >= c.x - 4 && clickX <= c.x + c.width + 4) {
+          const centerY = c.y + (c.height / 2);
+          const distY = Math.abs(clickY - centerY);
+          if (distY < bestDistY && distY < 250) {
+            bestDistY = distY;
+            clickedMeasureNumber = c.measureNumber;
+          }
+        }
+      }
+    }
+
+    // 3. Closest candidate fallback (for margin clicks)
+    if (clickedMeasureNumber === -1) {
+      let bestDist = Infinity;
+      for (const c of candidates) {
+        const dx = Math.max(0, c.x - clickX, clickX - (c.x + c.width));
+        const dy = Math.max(0, c.y - clickY, clickY - (c.y + c.height));
+        const dist = Math.hypot(dx, dy);
+        if (dist < bestDist) {
+          bestDist = dist;
+          clickedMeasureNumber = c.measureNumber;
+        }
+      }
     }
 
     if (clickedMeasureNumber !== -1) {
@@ -624,13 +682,15 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         }
       }
 
+      console.log('[handleSvgClick] Final clickedMeasureNumber:', clickedMeasureNumber, 'clickedMeasureBeat:', clickedMeasureBeat);
+
       const targetSeconds = beatToSeconds(clickedMeasureBeat, scoreData.tempos);
       onSeek(targetSeconds, clickedMeasureBeat, clickedMeasureNumber);
 
       // Immediately step cursor to clicked measure
       osmd.cursor.reset();
       let safety = 0;
-      while (safety < 3000 && !osmd.cursor.Iterator.EndReached) {
+      while (safety < 50000 && !osmd.cursor.Iterator.EndReached) {
         const currentBeat = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
         if (currentBeat >= clickedMeasureBeat - 0.01) {
           break;
@@ -645,149 +705,79 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden relative">
-      {/* Score Header Bar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-xs shrink-0">
-        <div className="flex items-center gap-2.5">
-          <span className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-            <span>🎺</span>
-            <span>{instrumentPartName}</span>
-          </span>
-
-          <span className="text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/70 font-semibold px-2 py-0.5 rounded-md text-[11px] border border-amber-300 dark:border-amber-800/50">
-            {activeViewMode === 'full' ? `Full Piece (Bars 1–${totalMeasures || endMeasure})` : `Bars ${startMeasure}–${endMeasure}`}
-          </span>
-
-          {/* View Mode Toggle: Focus Section vs Full Score */}
-          <div className="flex items-center bg-slate-200/80 dark:bg-slate-700/80 p-0.5 rounded-lg text-[11px] font-semibold border border-slate-300 dark:border-slate-600">
-            <button
-              onClick={() => setViewMode('focus')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                activeViewMode === 'focus'
-                  ? 'bg-amber-500 text-amber-950 shadow-xs font-bold'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-              title={`Focus and isolate Section (Bars ${sectionStartMeasure}–${sectionEndMeasure})`}
-            >
-              <Target className="w-3 h-3" />
-              <span>Focus Bars {sectionStartMeasure}–{sectionEndMeasure}</span>
-            </button>
-            <button
-              onClick={() => setViewMode('full')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
-                activeViewMode === 'full'
-                  ? 'bg-amber-500 text-amber-950 shadow-xs font-bold'
-                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-              }`}
-              title="Practice the complete piece with free playhead navigation"
-            >
-              <Layers className="w-3 h-3" />
-              <span>Full Piece</span>
-            </button>
-          </div>
-
-          {isPlaying && (
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 font-bold text-[10px] border border-emerald-300 dark:border-emerald-800">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Tracking</span>
-            </span>
-          )}
-        </div>
-
-        {/* Zoom Controls */}
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setZoom(z => Math.max(0.7, z - 0.1))}
-            className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-300 transition-colors"
-            title="Zoom out"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <span className="text-[11px] font-mono text-slate-500 w-10 text-center">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() => setZoom(z => Math.min(1.6, z + 0.1))}
-            className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-300 transition-colors"
-            title="Zoom in"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
+    <div className="flex flex-col h-full bg-[#fdfcf9] rounded-2xl overflow-hidden relative select-none">
       {/* Rhythm Diagnostics Status Bar (only shown when evaluations exist) */}
       {noteEvaluations && Object.keys(noteEvaluations).length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-300/80 dark:border-amber-700/60 text-xs text-amber-950 dark:text-amber-200 shrink-0 select-none animate-in fade-in duration-150">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5 bg-blue-50/80 border-b border-blue-100 text-xs text-blue-900 shrink-0 select-none animate-in fade-in duration-150">
           <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="font-bold flex items-center gap-1.5 text-amber-900 dark:text-amber-300">
-              <span>{!isPlaying ? '❄️ Results Frozen on Score:' : '⚡ Live Rhythm Tracking:'}</span>
+            <span className="font-semibold flex items-center gap-1.5 text-blue-950">
+              <span>{!isPlaying ? 'Results on Score:' : 'Live Rhythm Tracking:'}</span>
             </span>
-            <div className="flex items-center gap-2 text-[11px] font-medium text-slate-700 dark:text-slate-300">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-slate-700">
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-xs" />
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-xs" />
                 <span>On-Time</span>
               </span>
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-500 shadow-xs" />
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-500 shadow-xs" />
                 <span>Early / Late</span>
               </span>
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2.5 h-2.5 rounded-full bg-rose-500 shadow-xs" />
+                <span className="inline-block w-2 h-2 rounded-full bg-rose-500 shadow-xs" />
                 <span>Missed</span>
               </span>
             </div>
-            {problemMeasures && problemMeasures.length > 0 && (
-              <span className="font-bold text-amber-800 dark:text-amber-300 bg-amber-200/80 dark:bg-amber-900/60 px-2 py-0.5 rounded-md border border-amber-300 dark:border-amber-700 text-[11px]">
-                ⚠️ Rhythm Focus: Bar {problemMeasures.slice(0, 4).join(', ')}{problemMeasures.length > 4 ? ` (+${problemMeasures.length - 4} more)` : ''}
-              </span>
-            )}
           </div>
           {onClearEvaluations && (
             <button
               onClick={onClearEvaluations}
-              className="px-2.5 py-1 text-[11px] font-bold bg-white dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg border border-amber-300 dark:border-slate-600 transition shadow-2xs cursor-pointer active:scale-95"
+              className="px-2 py-0.5 text-[10px] font-medium bg-white hover:bg-slate-50 text-slate-600 rounded-md border border-slate-200 transition shadow-2xs cursor-pointer"
             >
-              Clear Results
+              Clear
             </button>
           )}
         </div>
       )}
 
-      {/* Sheet Music Canvas Area with Score Following Tracker Overlay */}
-      <div className="flex-1 overflow-auto p-3 sm:p-5 flex flex-col items-center justify-start min-h-[300px] bg-slate-100/70 dark:bg-slate-950/70">
+      {/* Sheet Music Canvas Area */}
+      <div className="flex-1 overflow-auto px-2 py-1 flex flex-col items-center justify-start min-h-[300px] bg-[#fdfcf9]">
         {errorMsg && (
-          <div className="p-4 bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 rounded-xl text-red-600 dark:text-red-400 text-xs max-w-md text-center my-auto">
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs max-w-md text-center my-auto">
             {errorMsg}
           </div>
         )}
 
-        {/* Relative wrapper holding both OSMD SVG and custom glowing tracker cursor - Clean white sheet music paper */}
+        {/* Relative wrapper holding both OSMD SVG and custom glowing tracker cursor - Clean sheet music surface */}
         <div
           ref={wrapperRef}
-          className="relative w-full max-w-4xl mx-auto flex justify-center bg-white text-slate-900 rounded-2xl shadow-xl p-4 sm:p-6 border border-slate-200/80 my-2 min-h-[220px] transition-all"
+          className="relative w-full max-w-[1010px] mx-auto flex flex-col items-center bg-[#fdfcf9] text-slate-900 min-h-[220px] cursor-pointer select-none"
           onClick={handleSvgClick}
         >
-          {/* OSMD SVG Container - Managed by OSMD */}
+
+          {/* OSMD SVG Container */}
           <div
             ref={containerRef}
-            className="w-full flex justify-center cursor-pointer select-none bg-white rounded-xl"
+            className="w-full flex justify-center cursor-pointer select-none bg-transparent"
           />
 
-          {/* High-visibility glowing score tracker bar overlay - Sibling to containerRef */}
+          {/* Shared Playback Tracker Cursor - Crisp blue vertical line spanning staves */}
           <div
             ref={customCursorRef}
+            data-score-tracker="smooth"
+            aria-hidden="true"
             style={{
               display: 'none',
               position: 'absolute',
-              width: '6px',
-              height: '56px',
-              backgroundColor: 'rgba(245, 158, 11, 0.95)',
-              borderRadius: '3px',
-              boxShadow: '0 0 14px 4px rgba(245, 158, 11, 0.8), 0 0 4px 1px #fff',
+              left: 0,
+              top: 0,
+              width: '2px',
+              willChange: 'transform',
+              height: '120px',
+              backgroundColor: '#0071e3',
+              borderRadius: '1.25px',
               pointerEvents: 'none',
-              transition: isPlaying ? 'left 0.06s linear, top 0.08s ease-out' : 'none',
-              zIndex: 30,
+              transition: 'none',
+              zIndex: 25,
             }}
           />
         </div>

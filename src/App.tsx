@@ -1,443 +1,323 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Upload, Music, RefreshCw, AlertCircle, 
-  Edit2, Check, RotateCcw, Save
+  Music, Upload, Calendar, BookOpen, Folder, ChevronDown, 
+  ArrowUpRight, Check, X, CheckCircle2, LayoutGrid, RotateCcw, GraduationCap
 } from 'lucide-react';
-import { ScoreViewer } from './components/ScoreViewer';
-import { TeacherReviewPanel } from './components/TeacherReviewPanel';
-import { AddGoalModal } from './components/AddGoalModal';
-import { PracticePlanSummary } from './components/PracticePlanSummary';
-import { StudentPracticeView } from './components/StudentPracticeView';
+import { ConductorScoreViewer } from './components/ConductorScoreViewer';
+import { FloatingWindow, focusPopout } from './components/windows/FloatingWindow';
+import { useWindowManager, snapRect, RAIL_W, TOP_H } from './components/windows/useWindowManager';
+import type { WinId, SnapZone } from './components/windows/useWindowManager';
+import { ExercisesWorkspace } from './components/ExercisesWorkspace';
+import { PlanNotesTab } from './components/PlanNotesTab';
 import { StudentSubmissionsHub } from './components/StudentSubmissionsHub';
-import { KnowledgeSimulatorView } from './components/KnowledgeSimulatorView';
+import { ExercisesTab } from './components/ExercisesTab';
+import { StudentPracticeView } from './components/StudentPracticeView';
 import { SuggestChangesWidget } from './components/SuggestChangesWidget';
-import { 
-  ParsedScore, PracticeArea, InstrumentProfile, 
-  MusicalSection 
-} from './types/portal';
-import { INSTRUMENT_PROFILES } from './utils/instrumentProfiles';
 import { parseMusicXmlToScore, unpackMusicXml } from './utils/scoreParser';
-import { segmentMeasuresIntoSections, extractFlatPracticeAreas } from './utils/scoreAnalyzer';
+import type { StudentProfile, StoredExercise, MusicalSection, PracticeArea, LibraryScore } from './types/portal';
+import { fetchStudentsFromStorage } from './utils/studentRecordingManager';
+import { fetchUploadedScores, uploadScore } from './utils/libraryApi';
 
-const STORAGE_KEY = 'aipc_teacher_portal_state_v1';
-
-interface SavedState {
-  scoreTitle: string;
-  xmlContent: string;
-  selectedDemoId: string;
-  currentInstrumentId: string;
-  selectedPartId: string;
-  sections: MusicalSection[];
-  selectedSectionId: string | null;
-  selectedAreaId: string | null;
-  timestamp: number;
-}
-
-const DEMO_PIECES = [
+/** Built-in sample scores, always available in the library. */
+const BUILTIN_SCORES: LibraryScore[] = [
   {
-    id: 'neruda',
-    name: 'Neruda: Concerto in E-flat (Trumpet)',
-    path: '/neruda_trumpet_concerto_excerpt.musicxml',
-    instrumentId: 'trumpet',
-    description: 'Chunked in 4 sections: Section 2 (Bars 6-10) with Rapid Tonguing & Complex Rhythm, plus Leaps'
-  },
-  {
-    id: 'cruelangel',
-    name: 'Cruel Angel\'s Thesis (Brass / Ensemble)',
-    path: '/cruelangel.musicxml',
-    instrumentId: 'trumpet',
-    description: 'Dynamic syncopations and running 16th figures'
-  },
-  {
-    id: 'odetojoy',
-    name: 'Beethoven: Ode to Joy (Theme)',
-    path: '/Ode_To_Joy_Demo.musicxml',
-    instrumentId: 'trumpet',
-    description: 'Stepwise melodies, even rhythm & clear phrasing'
+    id: 'danxia',
+    title: 'Beautiful Danxia',
+    composer: 'Li Wei, 2023',
+    xmlPath: '/beautiful_danxia_flutes.musicxml',
+    builtin: true,
+    uploadedAt: '2000-01-01T00:00:00.000Z',
   },
   {
     id: 'whales',
-    name: 'Galante: Sailing with Whales (Trumpet 1)',
-    path: '/sailing_with_whales_trumpet1.musicxml',
-    instrumentId: 'trumpet',
-    description: 'Thematic ostinato groove & High Register Entrance'
-  }
+    title: 'Sailing with Whales',
+    composer: 'Rossano Galante',
+    xmlPath: '/sailing-with-whales-rossano-galante.mxl',
+    builtin: true,
+    uploadedAt: '2000-01-02T00:00:00.000Z',
+  },
+  {
+    id: 'neruda',
+    title: 'Trumpet Concerto in E-flat',
+    composer: 'J.B.G. Neruda',
+    xmlPath: '/neruda_trumpet_concerto_excerpt.musicxml',
+    builtin: true,
+    uploadedAt: '2000-01-03T00:00:00.000Z',
+  },
+];
+
+const VIEW_OPTIONS: { id: string; label: string }[] = [
+  { id: 'full', label: 'Full score' },
+  { id: 'flute', label: 'Flute' },
+  { id: 'oboe', label: 'Oboe' },
+  { id: 'clarinet', label: 'Clarinet' },
+  { id: 'saxophone', label: 'Saxophone' },
+  { id: 'trumpet', label: 'Trumpet' },
+  { id: 'horn', label: 'Horn' },
+  { id: 'trombone', label: 'Trombone' },
+  { id: 'euphonium_tuba', label: 'Euphonium & Tuba' },
+  { id: 'percussion', label: 'Percussion' },
 ];
 
 export const App: React.FC = () => {
-  // Application State
-  const [selectedDemoId, setSelectedDemoId] = useState<string>('neruda');
+  // Floating window system
+  const { wins, popped, setPopped, highlight, toggle, open, close, focus, setRect, toggleShade, toggleMaximize, arrange, resetLayout } = useWindowManager();
+  const [snapZone, setSnapZone] = useState<SnapZone>(null);
+  const frontId = (Object.keys(wins) as WinId[]).filter(k => wins[k].open).sort((a, b) => wins[b].z - wins[a].z)[0];
+  // Exercises tab: exercises per score vs. what has been sent to students
+  const [exercisesView, setExercisesView] = useState<'score' | 'sent'>('score');
+
+  // Score library (built-in + uploaded)
+  const [uploadedScores, setUploadedScores] = useState<LibraryScore[]>([]);
+  const library = [...BUILTIN_SCORES, ...uploadedScores];
+  const [selectedScoreId, setSelectedScoreId] = useState<string>('danxia');
+  const [isScoreDropdownOpen, setIsScoreDropdownOpen] = useState<boolean>(false);
+  const activeScore = library.find(s => s.id === selectedScoreId) || library[0];
+
+  // Score Content & View Filter
   const [xmlContent, setXmlContent] = useState<string | null>(null);
-  const [parsedScore, setParsedScore] = useState<ParsedScore | null>(null);
-  const [currentInstrumentId, setCurrentInstrumentId] = useState<string>('trumpet');
-  const [selectedPartId, setSelectedPartId] = useState<string>('');
-  const [customScoreTitle, setCustomScoreTitle] = useState<string>('');
-  const [isEditingTitle, setIsEditingTitle] = useState<boolean>(false);
-  const [hasRestoredSession, setHasRestoredSession] = useState<boolean>(false);
-  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
-  
-  // Sections & Practice Areas
-  const [sections, setSections] = useState<MusicalSection[]>([]);
-  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
-  const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
-  const [selectedMeasure, setSelectedMeasure] = useState<number>(1);
+  const [xmlScoreId, setXmlScoreId] = useState<string | null>(null);
+  const [scoreViewMode, setScoreViewMode] = useState<string>('full');
+  const [isViewDropdownOpen, setIsViewDropdownOpen] = useState<boolean>(false);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
-  // App View Mode (Teacher Portal, Student Practice iPad View, Submissions Hub, Knowledge Simulator)
-  const [appMode, setAppMode] = useState<'portal' | 'student_practice' | 'submissions' | 'knowledge_simulator'>('portal');
-  const [activeStudentSection, setActiveStudentSection] = useState<MusicalSection | null>(null);
+  // Passage Selection Range (bars selected on the score)
+  const [passageRange, setPassageRange] = useState<[number, number]>([1, 2]);
 
-  // Modals
-  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [isPlanModalOpen, setIsPlanModalOpen] = useState<boolean>(false);
-
-  // Status & Loading
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Student Roster (distribution list from the parent platform)
+  const [students, setStudents] = useState<StudentProfile[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const currentInstrument = INSTRUMENT_PROFILES[currentInstrumentId] || INSTRUMENT_PROFILES.trumpet;
+  // In-App Student Practice Mode Preview
+  const [activePracticeExercise, setActivePracticeExercise] = useState<StoredExercise | null>(null);
+  const [practiceXmlContent, setPracticeXmlContent] = useState<string | null>(null);
 
-  // Flattened practice areas derived from sections for ScoreViewer
-  const allPracticeAreas = useMemo(() => {
-    return extractFlatPracticeAreas(sections);
-  }, [sections]);
-
-  // Load selected piece XML
-  const loadScoreFromUrl = async (url: string) => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`HTTP error ${resp.status}`);
-      const text = await resp.text();
-      setXmlContent(text);
-      processParsedScore(text, currentInstrument);
-    } catch (err: any) {
-      console.error('Failed to load score:', err);
-      setErrorMessage(err.message || 'Failed to fetch score file.');
-    } finally {
-      setIsLoading(false);
-    }
+  // Toast Notification
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (text: string) => {
+    setToastMessage(text);
+    setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Track if initial URL ?view=student auto-launch has already been handled
-  const hasAutoLaunchedRef = useRef<boolean>(false);
-
-  // Auto-launch Student Practice Mode if ?view=student or ?mode=student URL query param is provided
+  // Load uploaded scores + roster
   useEffect(() => {
-    if (hasAutoLaunchedRef.current) return;
-    const params = new URLSearchParams(window.location.search);
-    if ((params.get('view') === 'student' || params.get('mode') === 'student') && sections.length > 0) {
-      hasAutoLaunchedRef.current = true;
-      const sec = sections.find(s => s.id === selectedSectionId) || sections[0];
-      if (sec) {
-        setActiveStudentSection(sec);
-        setAppMode('student_practice');
-      }
-    }
-  }, [sections, selectedSectionId]);
-
-  // Clean exit from Student Practice back to Teacher Portal
-  const handleExitStudentPractice = () => {
-    hasAutoLaunchedRef.current = true;
-    try {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has('view') || url.searchParams.has('mode')) {
-        url.searchParams.delete('view');
-        url.searchParams.delete('mode');
-        window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
-      }
-    } catch (e) {
-      // ignore
-    }
-    setAppMode('portal');
-  };
-
-  // Initial load: restore from localStorage if available
-  useEffect(() => {
-    try {
-      const savedRaw = localStorage.getItem(STORAGE_KEY);
-      if (savedRaw) {
-        const saved: SavedState = JSON.parse(savedRaw);
-        if (saved && saved.xmlContent && saved.sections) {
-          setXmlContent(saved.xmlContent);
-          setCustomScoreTitle(saved.scoreTitle);
-          setSelectedDemoId(saved.selectedDemoId || 'custom');
-          setCurrentInstrumentId(saved.currentInstrumentId || 'trumpet');
-          setSelectedPartId(saved.selectedPartId || '');
-          setSections(saved.sections);
-          setSelectedSectionId(saved.selectedSectionId);
-          setSelectedAreaId(saved.selectedAreaId);
-          setHasRestoredSession(true);
-          setLastSavedTime(new Date(saved.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-
-          const parsed = parseMusicXmlToScore(saved.xmlContent);
-          setParsedScore(parsed);
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to restore saved state from localStorage:', err);
-    }
-
-    // Default fallback load
-    loadScoreFromUrl(DEMO_PIECES[0].path);
+    fetchUploadedScores().then(setUploadedScores).catch(err => console.error('Failed to load score library:', err));
+    fetchStudentsFromStorage().then(roster => {
+      if (roster && roster.length > 0) setStudents(roster);
+    });
   }, []);
 
-  // Auto-save to localStorage whenever state meaningfully changes
+  // Load the XML for the selected score
   useEffect(() => {
-    if (!xmlContent || sections.length === 0) return;
-
-    try {
-      const stateToSave: SavedState = {
-        scoreTitle: customScoreTitle || parsedScore?.title || 'Practice Piece',
-        xmlContent,
-        selectedDemoId,
-        currentInstrumentId,
-        selectedPartId,
-        sections,
-        selectedSectionId,
-        selectedAreaId,
-        timestamp: Date.now()
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-      setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    } catch (err) {
-      console.warn('Auto-save error:', err);
-    }
-  }, [sections, xmlContent, customScoreTitle, currentInstrumentId, selectedDemoId, selectedPartId, selectedSectionId, selectedAreaId, parsedScore]);
-
-  // Clear saved session and reset to default
-  const handleResetSession = () => {
-    localStorage.removeItem(STORAGE_KEY);
-    setHasRestoredSession(false);
-    setSelectedDemoId('neruda');
-    setCurrentInstrumentId('trumpet');
-    setCustomScoreTitle('');
-    loadScoreFromUrl(DEMO_PIECES[0].path);
-  };
-
-  // Process and analyze parsed score
-  const processParsedScore = (rawXml: string, instrument: InstrumentProfile, forcedTitle?: string) => {
-    try {
-      const parsed = parseMusicXmlToScore(rawXml);
-      setParsedScore(parsed);
-      setSelectedPartId(parsed.selectedPartId);
-      if (forcedTitle) {
-        setCustomScoreTitle(forcedTitle);
-      } else if (!customScoreTitle) {
-        setCustomScoreTitle(parsed.title);
-      }
-
-      const partToAnalyze = parsed.parts.find(p => p.id === parsed.selectedPartId) || parsed.parts[0];
-      if (partToAnalyze) {
-        const detectedSections = segmentMeasuresIntoSections(partToAnalyze.measures, instrument);
-        setSections(detectedSections);
-
-        if (detectedSections.length > 0) {
-          setSelectedSectionId(detectedSections[0].id);
-          if (detectedSections[0].challenges.length > 0) {
-            setSelectedAreaId(detectedSections[0].challenges[0].id);
-          } else {
-            setSelectedAreaId(null);
-          }
+    if (!activeScore) return;
+    let cancelled = false;
+    setXmlContent(null);
+    setXmlScoreId(null);
+    (async () => {
+      try {
+        const resp = await fetch(activeScore.xmlPath);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await unpackMusicXml(await resp.arrayBuffer());
+        if (!cancelled) {
+          setXmlContent(text);
+          setXmlScoreId(activeScore.id);
         }
+      } catch (err: any) {
+        console.error('Failed to load score XML:', err);
+        if (!cancelled) showToast(`Could not load "${activeScore.title}"`);
       }
-    } catch (err: any) {
-      console.error('Error processing score:', err);
-      setErrorMessage(err.message || 'Error processing score analysis.');
-    }
-  };
+    })();
+    return () => { cancelled = true; };
+  }, [activeScore?.id, activeScore?.xmlPath]);
 
-  // Handle instrument change
-  const handleInstrumentChange = (newInstId: string) => {
-    setCurrentInstrumentId(newInstId);
-    const newInst = INSTRUMENT_PROFILES[newInstId] || INSTRUMENT_PROFILES.trumpet;
-    if (parsedScore) {
-      const partToAnalyze = parsedScore.parts.find(p => p.id === selectedPartId) || parsedScore.parts[0];
-      if (partToAnalyze) {
-        const newlyDetectedSections = segmentMeasuresIntoSections(partToAnalyze.measures, newInst);
-        setSections(newlyDetectedSections);
-      }
-    }
-  };
-
-  // Handle local file upload (.musicxml, .xml, .mxl)
+  // Upload a score (one file at a time; repeat for more)
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ''; // allow uploading the same file again
     if (!file) return;
 
-    // Immediately extract a clean name from the file
-    const cleanFileName = file.name
-      .replace(/\.(musicxml|xml|mxl)$/i, '')
-      .replace(/[-_]/g, ' ')
-      .trim();
-
-    setIsLoading(true);
-    setErrorMessage(null);
+    setIsUploading(true);
     try {
-      const buffer = await file.arrayBuffer();
-      const unzippedXml = await unpackMusicXml(buffer);
-      setXmlContent(unzippedXml);
-      setSelectedDemoId('custom');
-      processParsedScore(unzippedXml, currentInstrument, cleanFileName);
-    } catch (err: any) {
-      console.error('File upload error:', err);
-      setErrorMessage(err.message || 'Failed to parse uploaded score file.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Goal Actions
-  const handleAcceptGoal = (areaId: string) => {
-    setSections(prev => prev.map(sec => ({
-      ...sec,
-      challenges: sec.challenges.map(c => 
-        c.id === areaId ? { ...c, status: 'accepted' } : c
-      )
-    })));
-  };
-
-  const handleAcceptAllInSection = (sectionId: string) => {
-    setSections(prev => prev.map(sec => {
-      if (sec.id !== sectionId) return sec;
-      return {
-        ...sec,
-        challenges: sec.challenges.map(c => 
-          c.status === 'removed' ? c : { ...c, status: 'accepted' }
-        )
-      };
-    }));
-  };
-
-  const handleEditGoal = (areaId: string, updatedGoal: string, targetTempo?: number, teacherNote?: string) => {
-    setSections(prev => prev.map(sec => ({
-      ...sec,
-      challenges: sec.challenges.map(c => 
-        c.id === areaId ? { 
-          ...c, 
-          status: 'edited', 
-          teacherGoal: updatedGoal, 
-          targetTempo, 
-          teacherNote: teacherNote || '' 
-        } : c
-      )
-    })));
-  };
-
-  const handleRemoveGoal = (areaId: string) => {
-    setSections(prev => prev.map(sec => ({
-      ...sec,
-      challenges: sec.challenges.map(c => 
-        c.id === areaId ? { ...c, status: 'removed' } : c
-      )
-    })));
-  };
-
-  const handleRestoreGoal = (areaId: string) => {
-    setSections(prev => prev.map(sec => ({
-      ...sec,
-      challenges: sec.challenges.map(c => 
-        c.id === areaId ? { ...c, status: 'suggested' } : c
-      )
-    })));
-  };
-
-  const handleAddCustomArea = (newArea: PracticeArea) => {
-    let placed = false;
-    setSections(prev => prev.map(sec => {
-      if (newArea.startMeasure >= sec.startMeasure && newArea.startMeasure <= sec.endMeasure) {
-        placed = true;
-        return {
-          ...sec,
-          challenges: [...sec.challenges, newArea]
-        };
+      const xml = file.name.toLowerCase().endsWith('.mxl')
+        ? await unpackMusicXml(await file.arrayBuffer())
+        : await file.text();
+      let title = file.name.replace(/\.[^.]+$/, '');
+      let composer: string | undefined;
+      try {
+        const parsed = parseMusicXmlToScore(xml);
+        if (parsed.title && parsed.title !== 'Untitled Piece') title = parsed.title;
+        composer = parsed.composer;
+      } catch {
+        throw new Error('That file is not a valid MusicXML score.');
       }
-      return sec;
+      const saved = await uploadScore({ title, composer, fileName: file.name, xml });
+      setUploadedScores(prev => [...prev, saved]);
+      setSelectedScoreId(saved.id);
+      open('exercises');
+      setExercisesView('score');
+      showToast(`Score "${title}" uploaded. Suggested exercises are ready.`);
+    } catch (err: any) {
+      console.error('Failed to upload file:', err);
+      showToast(err?.message || 'Failed to upload score.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Launch In-App Student Practice Session
+  const handleLaunchPractice = async (exercise: StoredExercise) => {
+    try {
+      let xml = xmlContent;
+      if (exercise.scorePath !== activeScore.xmlPath) {
+        const res = await fetch(exercise.scorePath);
+        if (res.ok) {
+          xml = await unpackMusicXml(await res.arrayBuffer());
+        }
+      }
+      setPracticeXmlContent(xml);
+      setActivePracticeExercise(exercise);
+    } catch (e) {
+      console.error('Failed to launch student practice view:', e);
+    }
+  };
+
+  // If in-app student practice preview is active
+  if (activePracticeExercise) {
+    const sec = activePracticeExercise.section;
+    const challenges: PracticeArea[] = (sec.goals || []).map((g, idx) => ({
+      id: g.areaId || `goal_${idx}_${Date.now()}`,
+      category: (g.category as any) || 'custom',
+      startMeasure: g.startMeasure,
+      endMeasure: g.endMeasure,
+      detectedReason: g.teacherNote || g.goal,
+      defaultGoal: g.goal,
+      status: 'accepted',
+      teacherGoal: g.goal,
+      teacherNote: g.teacherNote || '',
+      targetTempo: g.targetTempo,
     }));
 
-    if (!placed && sections.length > 0) {
-      setSections(prev => {
-        const copy = [...prev];
-        copy[copy.length - 1].challenges.push(newArea);
-        return copy;
-      });
-    }
+    const activeSectionObj: MusicalSection = {
+      id: sec.id || `sec_${sec.sectionNumber}`,
+      sectionNumber: sec.sectionNumber,
+      title: sec.title || `Section ${sec.sectionNumber} (Bars ${sec.startMeasure}–${sec.endMeasure})`,
+      startMeasure: sec.startMeasure,
+      endMeasure: sec.endMeasure,
+      totalMeasures: sec.endMeasure - sec.startMeasure + 1,
+      challenges,
+      status: 'all_approved'
+    };
 
-    setSelectedAreaId(newArea.id);
+    return (
+      <StudentPracticeView
+        xmlUrl={activePracticeExercise.scorePath}
+        xmlContent={practiceXmlContent}
+        pieceTitle={activePracticeExercise.scoreTitle}
+        instrumentName={activePracticeExercise.instrumentName}
+        sectionId={activeSectionObj.id}
+        sectionTitle={activeSectionObj.title}
+        measureRange={[activeSectionObj.startMeasure, activeSectionObj.endMeasure]}
+        sections={[activeSectionObj]}
+        activeSection={activeSectionObj}
+        exerciseId={activePracticeExercise.id}
+        studentId={activePracticeExercise.studentId}
+        studentName={activePracticeExercise.studentName}
+        onExit={() => setActivePracticeExercise(null)}
+        onViewSubmissions={() => {
+          setActivePracticeExercise(null);
+          open('recordings');
+        }}
+      />
+    );
+  }
+
+
+  const viewLabel = VIEW_OPTIONS.find(o => o.id === scoreViewMode)?.label || 'Full score';
+
+  const WINDOWS: { id: WinId; title: string; icon: React.ComponentType<{ className?: string; strokeWidth?: number }>; key: string }[] = [
+    { id: 'exercises', title: 'Exercises', icon: BookOpen, key: '1' },
+    { id: 'plans', title: 'Practice plans', icon: Calendar, key: '2' },
+    { id: 'recordings', title: 'Shared recordings', icon: Folder, key: '3' },
+  ];
+
+  const railClick = (id: WinId) => {
+    if (popped[id]) focusPopout(id);
+    else toggle(id);
   };
 
-  const handleSelectSection = (sectionId: string) => {
-    setSelectedSectionId(sectionId);
-    const sec = sections.find(s => s.id === sectionId);
-    if (sec && sec.challenges.length > 0) {
-      setSelectedAreaId(sec.challenges[0].id);
+  // Ctrl/⌘ + 1–4 toggles windows
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      const w = WINDOWS.find(x => x.key === e.key);
+      if (!w) return;
+      e.preventDefault();
+      railClick(w.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const renderWindowBody = (id: WinId) => {
+    switch (id) {
+      case 'exercises':
+        return (
+          <div className="flex flex-col h-full min-h-0">
+            <div className="px-3 pt-2 pb-1 shrink-0">
+              <div className="flex bg-slate-100 rounded-lg p-0.5 text-[11px] font-semibold text-slate-600">
+                {([['score', 'Score exercises'], ['sent', 'Sent to students']] as const).map(([k, label]) => (
+                  <button
+                    key={k}
+                    onClick={() => setExercisesView(k)}
+                    className={`flex-1 px-2.5 py-1 rounded-md transition-all cursor-pointer ${
+                      exercisesView === k ? 'bg-white text-slate-900 shadow-sm' : 'hover:text-slate-900'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {exercisesView === 'score' ? (
+                <ExercisesWorkspace
+                  score={activeScore}
+                  xmlContent={xmlScoreId === activeScore.id ? xmlContent : null}
+                  students={students}
+                  passageRange={passageRange}
+                  onPassageChange={setPassageRange}
+                  onToast={showToast}
+                />
+              ) : (
+                <ExercisesTab
+                  onLaunchPractice={(ex) => handleLaunchPractice(ex)}
+                  onViewSubmissions={() => open('recordings')}
+                  onOpenScoreForExercise={(path, range) => {
+                    const match = library.find(s => s.xmlPath === path);
+                    if (match) setSelectedScoreId(match.id);
+                    setPassageRange(range);
+                    setExercisesView('score');
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        );
+      case 'plans':
+        return <PlanNotesTab scores={library} onToast={showToast} />;
+      case 'recordings':
+        return (
+          <div className="h-full min-h-0 overflow-hidden">
+            <StudentSubmissionsHub onBack={() => close('recordings')} />
+          </div>
+        );
     }
   };
 
-  const acceptedCount = allPracticeAreas.filter(
-    a => a.status === 'accepted' || a.status === 'edited'
-  ).length;
-
-  const totalChallengesCount = allPracticeAreas.filter(
-    a => a.status !== 'removed'
-  ).length;
-
-  const availableParts = parsedScore?.parts.map(p => ({ id: p.id, name: p.name })) || [];
-  const maxMeasures = parsedScore?.parts[0]?.measures.length || 100;
-  const currentTitle = customScoreTitle || parsedScore?.title || 'Practice Piece';
-
-  // --------------------------------------------------------------------------
-  // Conditional Views: Student Practice Mode (iPad) & Submissions Hub
-  // --------------------------------------------------------------------------
-  if (appMode === 'student_practice' && activeStudentSection) {
-    const currentDemo = DEMO_PIECES.find(d => d.id === selectedDemoId);
-    return (
-      <>
-        <StudentPracticeView
-          xmlUrl={currentDemo?.path}
-          xmlContent={xmlContent}
-          pieceTitle={currentTitle}
-          instrumentName={currentInstrument.name}
-          sectionId={activeStudentSection.id}
-          sectionTitle={`Section ${activeStudentSection.sectionNumber}`}
-          measureRange={[activeStudentSection.startMeasure, activeStudentSection.endMeasure]}
-          sections={sections}
-          activeSection={activeStudentSection}
-          onSelectSection={(sec) => {
-            setActiveStudentSection(sec);
-            setSelectedSectionId(sec.id);
-          }}
-          onExit={handleExitStudentPractice}
-          onViewSubmissions={() => setAppMode('submissions')}
-        />
-        <SuggestChangesWidget appMode={appMode} />
-      </>
-    );
-  }
-
-  if (appMode === 'submissions') {
-    return (
-      <>
-        <StudentSubmissionsHub onBack={() => setAppMode('portal')} />
-        <SuggestChangesWidget appMode={appMode} />
-      </>
-    );
-  }
-
-  if (appMode === 'knowledge_simulator') {
-    return (
-      <>
-        <KnowledgeSimulatorView onBack={() => setAppMode('portal')} />
-        <SuggestChangesWidget appMode={appMode} />
-      </>
-    );
-  }
+  const snap = snapZone ? snapRect(snapZone) : null;
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      {/* Hidden File Input */}
+    <div className="h-screen w-screen bg-[#f5f5f7] text-slate-900 overflow-hidden font-sans select-none relative">
       <input
         ref={fileInputRef}
         type="file"
@@ -446,271 +326,223 @@ export const App: React.FC = () => {
         className="hidden"
       />
 
-      {/* Main Top Header */}
-      <header className="h-16 px-3 sm:px-6 bg-slate-900/95 border-b border-slate-800/80 flex items-center justify-between z-30 shrink-0 backdrop-blur-md">
-        {/* Brand & Axiom */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Music className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-extrabold tracking-tight text-white">
-                AIPC <span className="text-indigo-400 font-medium text-sm">Teacher Portal</span>
-              </h1>
-            </div>
-          </div>
+      {/* Canvas: the full score gets all the space */}
+      <main className="absolute inset-0" style={{ left: RAIL_W, top: TOP_H }}>
+        {xmlContent && xmlScoreId === activeScore.id ? (
+          <ConductorScoreViewer
+            scoreTitle={activeScore.title}
+            xmlContent={xmlContent}
+            scoreViewMode={scoreViewMode}
+            passageRange={passageRange}
+            onPassageChange={setPassageRange}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-xs text-slate-400">Loading score…</div>
+        )}
+      </main>
+
+      {/* Left rail */}
+      <aside
+        className="absolute left-0 top-0 bottom-0 z-40 flex flex-col items-center py-3 gap-1 bg-white/70 backdrop-blur-xl border-r border-black/5"
+        style={{ width: RAIL_W }}
+      >
+        <div className="h-9 flex items-end gap-[3px] pb-2 mb-2">
+          {[10, 18, 14, 7].map((h, i) => (
+            <span key={i} className="w-[3px] rounded-full bg-[#0071e3]" style={{ height: h }} />
+          ))}
+        </div>
+        {WINDOWS.map(w => {
+          const Icon = w.icon;
+          const isOpen = wins[w.id].open || popped[w.id];
+          return (
+            <button
+              key={w.id}
+              onClick={() => railClick(w.id)}
+              aria-label={w.title}
+              className={`group relative w-11 h-11 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                isOpen ? 'bg-[#0071e3]/10 text-[#0071e3]' : 'text-slate-500 hover:bg-black/5 hover:text-slate-900'
+              }`}
+            >
+              <Icon className="w-5 h-5" strokeWidth={1.75} />
+              {isOpen && <span className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-[#0071e3]" />}
+              {popped[w.id] && <ArrowUpRight className="absolute right-1 top-1 w-2.5 h-2.5" />}
+              <span className="pointer-events-none absolute left-full ml-2 px-2.5 py-1 rounded-lg bg-slate-900/90 text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">
+                {w.title} <span className="text-slate-400 ml-1">⌘{w.key}</span>
+              </span>
+            </button>
+          );
+        })}
+        <div className="flex-1" />
+        <button
+          onClick={arrange}
+          aria-label="Tidy windows"
+          className="group relative w-11 h-11 rounded-xl flex items-center justify-center text-slate-500 hover:bg-black/5 hover:text-slate-900 transition-all cursor-pointer"
+        >
+          <LayoutGrid className="w-5 h-5" strokeWidth={1.75} />
+          <span className="pointer-events-none absolute left-full ml-2 px-2.5 py-1 rounded-lg bg-slate-900/90 text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">
+            Tidy windows
+          </span>
+        </button>
+        <button
+          onClick={resetLayout}
+          aria-label="Reset layout"
+          className="group relative w-11 h-11 rounded-xl flex items-center justify-center text-slate-500 hover:bg-black/5 hover:text-slate-900 transition-all cursor-pointer"
+        >
+          <RotateCcw className="w-[18px] h-[18px]" strokeWidth={1.75} />
+          <span className="pointer-events-none absolute left-full ml-2 px-2.5 py-1 rounded-lg bg-slate-900/90 text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">
+            Reset layout
+          </span>
+        </button>
+        <a
+          href="/student.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Open Student Companion"
+          className="group relative w-11 h-11 rounded-xl flex items-center justify-center text-slate-500 hover:bg-black/5 hover:text-slate-900 transition-all"
+        >
+          <GraduationCap className="w-5 h-5" strokeWidth={1.75} />
+          <span className="pointer-events-none absolute left-full ml-2 px-2.5 py-1 rounded-lg bg-slate-900/90 text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">
+            Student Companion
+          </span>
+        </a>
+      </aside>
+
+      {/* Top toolbar */}
+      <header
+        className="absolute top-0 right-0 z-30 flex items-center justify-between px-5 bg-white/70 backdrop-blur-xl border-b border-black/5"
+        style={{ left: RAIL_W, height: TOP_H }}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <h1 className="text-[15px] font-semibold tracking-tight text-slate-900 truncate">{activeScore.title}</h1>
+          {activeScore.composer && (
+            <span className="text-xs text-slate-500 truncate hidden md:inline">{activeScore.composer}</span>
+          )}
         </div>
 
-        {/* Repertoire / Score Selector */}
-        <div className="flex items-center gap-3">
-          {/* Saved State Indicator */}
-          {lastSavedTime && (
-            <div className="hidden xl:flex items-center gap-1.5 text-[11px] text-emerald-400/90 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
-              <Save className="w-3 h-3" />
-              <span>Saved at {lastSavedTime}</span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-1.5 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60">
-            <span className="text-xs text-slate-400 pl-2 font-medium">Piece:</span>
-            <select
-              value={selectedDemoId}
-              onChange={(e) => {
-                const val = e.target.value;
-                setSelectedDemoId(val);
-                setCustomScoreTitle('');
-                const demo = DEMO_PIECES.find(d => d.id === val);
-                if (demo) {
-                  loadScoreFromUrl(demo.path);
-                  handleInstrumentChange(demo.instrumentId);
-                }
-              }}
-              className="bg-transparent text-xs text-white font-semibold outline-none px-2 py-1 cursor-pointer"
+        <div className="flex items-center gap-2 shrink-0">
+          {/* View */}
+          <div className="relative">
+            <button
+              onClick={() => { setIsViewDropdownOpen(!isViewDropdownOpen); setIsScoreDropdownOpen(false); }}
+              className="flex items-center gap-1 px-3 py-1.5 hover:bg-black/5 text-slate-700 font-medium text-xs rounded-lg transition-colors cursor-pointer"
             >
-              {DEMO_PIECES.map(d => (
-                <option key={d.id} value={d.id} className="bg-slate-900 text-white">
-                  {d.name}
-                </option>
-              ))}
-              {selectedDemoId === 'custom' && (
-                <option value="custom" className="bg-slate-900 text-white">Uploaded File</option>
-              )}
-            </select>
+              <span>{viewLabel}</span>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            </button>
+            {isViewDropdownOpen && (
+              <div className="absolute top-full right-0 mt-1.5 w-48 bg-white/90 backdrop-blur-xl rounded-xl shadow-xl border border-black/5 p-1 z-50 max-h-80 overflow-y-auto">
+                {VIEW_OPTIONS.map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => { setScoreViewMode(opt.id); setIsViewDropdownOpen(false); }}
+                    className={`w-full text-left px-3 py-1.5 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                      scoreViewMode === opt.id ? 'bg-[#0071e3] text-white' : 'text-slate-700 hover:bg-black/5'
+                    }`}
+                  >
+                    <span>{opt.label}</span>
+                    {scoreViewMode === opt.id && <Check className="w-3.5 h-3.5" />}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Instrument Context Selector */}
-          <div className="flex items-center gap-1.5 bg-slate-800/80 p-1 rounded-xl border border-slate-700/60">
-            <span className="text-xs text-slate-400 pl-2 font-medium">Instrument:</span>
-            <select
-              value={currentInstrumentId}
-              onChange={(e) => handleInstrumentChange(e.target.value)}
-              className="bg-transparent text-xs text-indigo-300 font-semibold outline-none px-2 py-1 cursor-pointer"
+          {/* Scores */}
+          <div className="relative">
+            <button
+              onClick={() => { setIsScoreDropdownOpen(!isScoreDropdownOpen); setIsViewDropdownOpen(false); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-black/5 text-slate-700 font-medium text-xs rounded-lg transition-colors cursor-pointer"
             >
-              {Object.values(INSTRUMENT_PROFILES).map(inst => (
-                <option key={inst.id} value={inst.id} className="bg-slate-900 text-white">
-                  {inst.name}
-                </option>
-              ))}
-            </select>
+              <Music className="w-3.5 h-3.5 text-slate-400" />
+              <span>Scores ({library.length})</span>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            </button>
+            {isScoreDropdownOpen && (
+              <div className="absolute top-full right-0 mt-1.5 w-72 bg-white/90 backdrop-blur-xl rounded-xl shadow-xl border border-black/5 p-1.5 z-50 max-h-96 overflow-y-auto">
+                {library.map(score => (
+                  <button
+                    key={score.id}
+                    onClick={() => {
+                      setSelectedScoreId(score.id);
+                      setIsScoreDropdownOpen(false);
+                      setExercisesView('score');
+                    }}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between cursor-pointer ${
+                      selectedScoreId === score.id ? 'bg-[#0071e3] text-white' : 'text-slate-700 hover:bg-black/5'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium leading-tight truncate">{score.title}</div>
+                      <div className={`text-[11px] mt-0.5 truncate ${selectedScoreId === score.id ? 'text-white/70' : 'text-slate-400'}`}>
+                        {score.composer || score.fileName || 'Uploaded score'}
+                      </div>
+                    </div>
+                    {selectedScoreId === score.id && <Check className="w-4 h-4 shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Prominent Student Portal Button */}
-          <button
-            onClick={() => {
-              const targetSection = sections.find(s => s.id === selectedSectionId) || sections[0] || {
-                id: 'default_sec_1',
-                sectionNumber: 1,
-                startMeasure: 1,
-                endMeasure: 5,
-                totalMeasures: 5,
-                challenges: []
-              };
-              setActiveStudentSection(targetSection);
-              setAppMode('student_practice');
-            }}
-            className="flex items-center gap-2 px-3.5 py-2 bg-linear-to-r from-amber-500 to-amber-600 hover:from-amber-450 hover:to-amber-550 text-amber-950 rounded-xl text-xs font-black shadow-md shadow-amber-500/20 border border-amber-300 transition-all active:scale-95 cursor-pointer ring-2 ring-amber-400/50"
-            title="Open Student Practice Portal (iPad Mode)"
-          >
-            <span className="text-sm">🎺</span>
-            <span className="tracking-wide">Student Portal</span>
-          </button>
-
-          {/* Submissions Hub Button */}
-          <button
-            onClick={() => setAppMode('submissions')}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold border border-slate-700 hover:border-slate-600 transition-all shadow-sm cursor-pointer"
-            title="View Student Practice Submissions & Archives (Organized by Student)"
-          >
-            <span>📥</span>
-            <span>Submissions</span>
-          </button>
-
-          {/* Developer Knowledgebase Link */}
-          <button
-            onClick={() => setAppMode('knowledge_simulator')}
-            className="px-2.5 py-1 text-[11px] font-medium text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 rounded-lg transition-colors cursor-pointer"
-            title="Developer: Pedagogical Knowledgebases (Diagnosis, Strategy, Guide)"
-          >
-            Developer
-          </button>
-
-          {/* Upload Button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
-            title="Upload score (.musicxml, .xml, .mxl)"
+            disabled={isUploading}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#0071e3] hover:bg-[#0062c4] disabled:opacity-60 text-white font-medium text-xs rounded-full transition-colors cursor-pointer"
           >
             <Upload className="w-3.5 h-3.5" />
-            <span>Upload Score</span>
+            <span>{isUploading ? 'Uploading…' : 'Upload score'}</span>
           </button>
         </div>
       </header>
 
-      {/* Sub-bar / Metric Ribbon & Editable Score Title */}
-      <div className="h-10 px-6 bg-slate-900/40 border-b border-slate-800/60 flex items-center justify-between text-xs text-slate-400 shrink-0">
-        <div className="flex items-center gap-3">
-          {/* Inline Editable Score Title */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400">Score:</span>
-            {isEditingTitle ? (
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={customScoreTitle}
-                  onChange={(e) => setCustomScoreTitle(e.target.value)}
-                  className="bg-slate-950 text-xs font-bold text-white px-2 py-0.5 rounded border border-indigo-500 outline-none"
-                  autoFocus
-                />
-                <button
-                  onClick={() => setIsEditingTitle(false)}
-                  className="p-1 text-emerald-400 hover:text-white"
-                  title="Save Name"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setIsEditingTitle(true)}
-                className="flex items-center gap-1 text-slate-200 hover:text-indigo-300 font-bold group"
-                title="Click to rename score"
-              >
-                <span>{currentTitle}</span>
-                <Edit2 className="w-3 h-3 text-slate-500 group-hover:text-indigo-400 transition-colors" />
-              </button>
-            )}
-          </div>
+      {/* Snap preview */}
+      {snap && (
+        <div
+          className="fixed z-[45] rounded-2xl bg-[#0071e3]/10 border border-[#0071e3]/40 pointer-events-none transition-all"
+          style={{ left: snap.x, top: snap.y, width: snap.w, height: snap.h }}
+        />
+      )}
 
-          <span className="w-1 h-1 rounded-full bg-slate-700" />
-          <span>
-            Sections: <strong className="text-indigo-400">{sections.length} Chunks</strong>
-          </span>
-          <span className="w-1 h-1 rounded-full bg-slate-700" />
-          <span>
-            Challenges: <strong className="text-slate-200">{totalChallengesCount}</strong>
-          </span>
-        </div>
+      {/* Floating windows */}
+      {WINDOWS.map(w => {
+        const st = wins[w.id];
+        if (!st.open && !popped[w.id]) return null;
+        return (
+          <FloatingWindow
+            key={w.id}
+            id={w.id}
+            title={w.title}
+            state={st}
+            isFront={frontId === w.id}
+            highlight={highlight === w.id}
+            onFocus={() => focus(w.id)}
+            onRect={(r) => setRect(w.id, r)}
+            onClose={() => close(w.id)}
+            onMaximize={() => toggleMaximize(w.id)}
+            onShade={() => toggleShade(w.id)}
+            onSnapPreview={setSnapZone}
+            onPopChange={(p) => setPopped(prev => ({ ...prev, [w.id]: p }))}
+            onNotify={showToast}
+          >
+            {renderWindowBody(w.id)}
+          </FloatingWindow>
+        );
+      })}
 
-        <div className="flex items-center gap-4">
-          {hasRestoredSession && (
-            <button
-              onClick={handleResetSession}
-              className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-300 transition-colors"
-              title="Reset to fresh default piece"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>Reset Session</span>
-            </button>
-          )}
-
-          <span className="text-slate-300">
-            Approved for Plan: <strong className="text-emerald-400">{acceptedCount}</strong>
-          </span>
-
-          {isLoading && (
-            <span className="flex items-center gap-1 text-indigo-400 animate-pulse text-[11px]">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Processing score...
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Error Alert if any */}
-      {errorMessage && (
-        <div className="bg-rose-500/15 border-b border-rose-500/30 px-6 py-2 text-xs text-rose-300 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{errorMessage}</span>
+      {/* Toast */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] bg-slate-900/90 backdrop-blur-xl text-white pl-4 pr-3 py-2.5 rounded-full shadow-xl flex items-center gap-2.5 text-xs">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+          <button onClick={() => setToastMessage(null)} className="text-slate-400 hover:text-white cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
-      {/* Main Split-Screen Workspace */}
-      <main className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 p-2 sm:p-4 min-h-0 overflow-y-auto md:overflow-hidden">
-        {/* Left: Interactive Score Viewer (7 cols) */}
-        <section className="md:col-span-7 xl:col-span-8 h-full min-h-0">
-          <ScoreViewer
-            xmlContent={xmlContent}
-            practiceAreas={allPracticeAreas}
-            selectedAreaId={selectedAreaId}
-            selectedSectionId={selectedSectionId}
-            onSelectArea={(id) => setSelectedAreaId(id)}
-            onMeasureClick={(mNum) => setSelectedMeasure(mNum)}
-            selectedPartId={selectedPartId}
-            onPartChange={(id) => setSelectedPartId(id)}
-            availableParts={availableParts}
-          />
-        </section>
-
-        {/* Right: Teacher Review Panel (5 cols) */}
-        <section className="md:col-span-5 xl:col-span-4 h-full min-h-0">
-          <TeacherReviewPanel
-            sections={sections}
-            selectedAreaId={selectedAreaId}
-            selectedSectionId={selectedSectionId}
-            onSelectArea={(id) => setSelectedAreaId(id)}
-            onSelectSection={handleSelectSection}
-            onAcceptGoal={handleAcceptGoal}
-            onAcceptAllInSection={handleAcceptAllInSection}
-            onEditGoal={handleEditGoal}
-            onRemoveGoal={handleRemoveGoal}
-            onRestoreGoal={handleRestoreGoal}
-            onOpenAddModal={() => setIsAddModalOpen(true)}
-            onGeneratePlan={() => setIsPlanModalOpen(true)}
-            onLaunchStudentPractice={(section) => {
-              setActiveStudentSection(section);
-              setAppMode('student_practice');
-            }}
-            acceptedCount={acceptedCount}
-            totalChallengesCount={totalChallengesCount}
-          />
-        </section>
-      </main>
-
-      {/* Modals */}
-      <AddGoalModal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        onAddArea={handleAddCustomArea}
-        initialMeasure={selectedMeasure}
-        maxMeasures={maxMeasures}
-      />
-
-      <PracticePlanSummary
-        isOpen={isPlanModalOpen}
-        onClose={() => setIsPlanModalOpen(false)}
-        scoreTitle={currentTitle}
-        instrumentName={currentInstrument.name}
-        sections={sections}
-        onAssignToStudent={(plan) => {
-          console.log('Assigned Plan to Student:', plan);
-        }}
-      />
-
-      {/* Suggest Changes Interactive Inspector & Agent Collaboration Widget */}
-      <SuggestChangesWidget appMode={appMode} />
+      <SuggestChangesWidget appMode={'exercises' as any} />
     </div>
   );
 };
 
 export default App;
-

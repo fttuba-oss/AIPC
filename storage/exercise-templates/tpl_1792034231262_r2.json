@@ -1,0 +1,27 @@
+{
+  "id": "tpl_1792034231262_r2",
+  "scoreId": "score_1792034229527_snur",
+  "type": "rhythm",
+  "title": "Syncopation – Bars 30–31",
+  "startMeasure": 30,
+  "endMeasure": 31,
+  "tempo": 132,
+  "rhythmKind": "syncopation",
+  "parts": [
+    "Piccolo\n(Optional)",
+    "Oboe\n(Optional)",
+    "1st Clarinet in B♭",
+    "2nd Clarinet in B♭",
+    "3rd Clarinet in B♭",
+    "1st Alto\nSaxophone in E♭",
+    "2nd Alto\nSaxophone in E♭",
+    "1st Trumpet in B♭",
+    "2nd Trumpet in B♭",
+    "3rd Trumpet in B♭",
+    "Timpani",
+    "Snare Drum"
+  ],
+  "notes": "Subdivide the beat in your head before each off-beat entrance. Start slowly with the click, then raise the tempo.",
+  "suggested": true,
+  "createdAt": "2026-10-15T03:17:11.261Z"
+}

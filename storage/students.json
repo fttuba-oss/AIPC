@@ -1,0 +1,32 @@
+[
+  {
+    "id": "stud_sarah",
+    "name": "Sarah Lin",
+    "instrument": "Flute 2",
+    "grade": "Grade 8"
+  },
+  {
+    "id": "stud_alex",
+    "name": "Alex Morgan",
+    "instrument": "Trumpet 1",
+    "grade": "Grade 8"
+  },
+  {
+    "id": "stud_chloe",
+    "name": "Chloe Tan",
+    "instrument": "Trumpet 1",
+    "grade": "Grade 7"
+  },
+  {
+    "id": "stud_liam",
+    "name": "Liam Wong",
+    "instrument": "Flute 1",
+    "grade": "Grade 8"
+  },
+  {
+    "id": "stud_marcus",
+    "name": "Marcus Chen",
+    "instrument": "Clarinet 1",
+    "grade": "Grade 9"
+  }
+]

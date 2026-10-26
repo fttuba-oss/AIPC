@@ -1,6 +1,9 @@
+import { metronomeMarkQuarterBpm, type MetronomeMeasure } from './metronome';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 
 export interface NoteEvent {
+  partId?: string;      // Score part this note belongs to (for the live part mix)
+  instrument?: string;  // Soundfont instrument id used to voice this note (per-part sound)
   pitch: number;        // MIDI note number (e.g. 60 = C4)
   time: number;         // Start time in seconds from start
   duration: number;     // Duration in seconds
@@ -43,6 +46,7 @@ export interface ScorePlaybackData {
   clicks: MetronomeClick[];
   cursorPositions: CursorPosition[];
   measureStartBeats: number[];
+  metronomeMeasures?: MetronomeMeasure[];
   measureStartBeatByNumber?: Record<number, number>;
   initialTimeSignature: { numerator: number; denominator: number };
 }
@@ -104,7 +108,10 @@ export function parseTempoTimeline(osmd: OpenSheetMusicDisplay, rawXml?: string 
     } else {
       const perMinuteMatch = rawXml.match(/<per-minute[^>]*>(\d+(?:\.\d+)?)<\/per-minute>/i);
       if (perMinuteMatch) {
-        currentBpm = Math.round(parseFloat(perMinuteMatch[1]));
+        const mark = rawXml.match(/<metronome\b[^>]*>([\s\S]*?)<\/metronome>/i)?.[1] || '';
+        const beatUnit = mark.match(/<beat-unit[^>]*>([^<]+)<\/beat-unit>/i)?.[1] || 'quarter';
+        const dots = (mark.match(/<beat-unit-dot\b/g) || []).length;
+        currentBpm = Math.round(metronomeMarkQuarterBpm(parseFloat(perMinuteMatch[1]), beatUnit, dots));
         foundBpm = true;
       }
     }
@@ -145,13 +152,19 @@ export function parseTempoTimeline(osmd: OpenSheetMusicDisplay, rawXml?: string 
       const measureStartBeat = measure.AbsoluteTimestamp.RealValue * 4;
 
       if (measure.TempoInBPM && measure.TempoInBPM > 0 && measure.TempoInBPM !== lastBpm) {
-        const timeInSeconds = beatToSeconds(measureStartBeat, tempos);
-        tempos.push({
-          beat: measureStartBeat,
-          bpm: Math.round(measure.TempoInBPM),
-          timeInSeconds,
-        });
-        lastBpm = Math.round(measure.TempoInBPM);
+        const roundedBpm = Math.round(measure.TempoInBPM);
+        if (measureStartBeat === 0) {
+          tempos[0].bpm = roundedBpm;
+          lastBpm = roundedBpm;
+        } else {
+          const timeInSeconds = beatToSeconds(measureStartBeat, tempos);
+          tempos.push({
+            beat: measureStartBeat,
+            bpm: roundedBpm,
+            timeInSeconds,
+          });
+          lastBpm = roundedBpm;
+        }
       }
     }
   }
@@ -490,6 +503,13 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
       clicks: uniqueClicks,
       cursorPositions,
       measureStartBeats,
+      metronomeMeasures: measures.map(measure => ({
+        measureNumber: measure.MeasureNumber,
+        startBeat: measure.AbsoluteTimestamp.RealValue * 4,
+        endBeat: (measure.AbsoluteTimestamp.RealValue + measure.Duration.RealValue) * 4,
+        numerator: measure.ActiveTimeSignature?.Numerator || initialNumerator,
+        denominator: measure.ActiveTimeSignature?.Denominator || initialDenominator,
+      })),
       measureStartBeatByNumber,
       initialTimeSignature: {
         numerator: initialNumerator,
@@ -512,10 +532,29 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
 export function getTargetPartAndNotes(
   scorePlaybackData: ScorePlaybackData | null,
   instrumentName: string,
-  measureRange: [number, number]
+  measureRange: [number, number],
+  partId?: string | null
 ): { activePart: PartData | undefined; targetNotes: NoteEvent[]; sectionStartBeat: number; totalSectionEndBeat: number } {
   if (!scorePlaybackData || !scorePlaybackData.parts || scorePlaybackData.parts.length === 0) {
     return { activePart: undefined, targetNotes: [], sectionStartBeat: 0, totalSectionEndBeat: 0 };
+  }
+
+  // 0. The student chose a specific part: use it directly
+  const explicit = partId ? scorePlaybackData.parts.find(p => p.id === partId) : undefined;
+  if (explicit) {
+    const targetNotes = explicit.notes.filter(n => n.measureNumber >= measureRange[0] && n.measureNumber <= measureRange[1]);
+    const startMap = scorePlaybackData.measureStartBeatByNumber?.[measureRange[0]];
+    const fbStart = (scorePlaybackData.measureStartBeats || [])[measureRange[0] - 1] ?? ((measureRange[0] - 1) * 4);
+    const endMap = scorePlaybackData.measureStartBeatByNumber?.[measureRange[1] + 1];
+    const fbEnd = (scorePlaybackData.measureStartBeats || [])[measureRange[1]] ?? (measureRange[1] * 4);
+    return {
+      activePart: explicit,
+      targetNotes,
+      sectionStartBeat: targetNotes.length > 0 ? targetNotes[0].beat : (startMap ?? fbStart),
+      totalSectionEndBeat: targetNotes.length > 0
+        ? targetNotes[targetNotes.length - 1].beat + (targetNotes[targetNotes.length - 1].durationBeats || 1)
+        : (endMap ?? fbEnd),
+    };
   }
 
   // 1. Keyword-based matching

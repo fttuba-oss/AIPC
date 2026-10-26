@@ -1,0 +1,33 @@
+{
+  "id": "ex_danxia_bars27_28_sarah",
+  "title": "Beautiful Danxia - Flute 2 Syncopation Loop (Bars 27–28)",
+  "scoreTitle": "Beautiful Danxia for Concert Band",
+  "scorePath": "/beautiful_danxia_flutes.musicxml",
+  "instrumentId": "flute_2",
+  "instrumentName": "Flute 2",
+  "studentId": "stud_sarah",
+  "studentName": "Sarah Lin",
+  "assignedDate": "2026-09-21T05:55:00.000Z",
+  "status": "assigned",
+  "section": {
+    "id": "sec_loop_27_28",
+    "sectionNumber": 1,
+    "title": "27 – 28 (Loop)",
+    "startMeasure": 25,
+    "endMeasure": 36,
+    "loopStartMeasure": 27,
+    "loopEndMeasure": 28,
+    "goals": [
+      {
+        "category": "complex_rhythm",
+        "measureRange": "Bars 27–28",
+        "startMeasure": 27,
+        "endMeasure": 28,
+        "goal": "Lock into 8th/16th subdivision clicks and anchor syncopations without rushing bar 28.",
+        "targetTempo": 96,
+        "teacherNote": "Rehearsal focus: Previous diagnostic showed woodwinds rushing the syncopations in bar 28. Use 8th-note or 16th-note subdivision clicks."
+      }
+    ]
+  },
+  "teacherGeneralNotes": "Band Director assignment: Practice with the ensemble backing. Mute your part using Minus-One mode and record your official take when ready."
+}

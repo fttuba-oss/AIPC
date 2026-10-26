@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, Printer, Copy, Check, 
-  Send, User, Calendar, BookOpen
+  Send, User, Calendar, BookOpen, Sparkles
 } from 'lucide-react';
-import { PracticePlan, PracticePlanSection, PracticePlanGoal, MusicalSection } from '../types/portal';
+import { PracticePlan, PracticePlanSection, PracticePlanGoal, MusicalSection, StudentProfile, StoredExercise } from '../types/portal';
 import { CATEGORY_DEFINITIONS } from '../utils/instrumentProfiles';
+import { fetchStudentsFromStorage, saveExerciseToStorage } from '../utils/studentRecordingManager';
 
 interface PracticePlanSummaryProps {
   isOpen: boolean;
   onClose: () => void;
   scoreTitle: string;
+  scorePath?: string;
   instrumentName: string;
   sections: MusicalSection[];
   onAssignToStudent?: (plan: PracticePlan) => void;
@@ -19,16 +21,30 @@ export const PracticePlanSummary: React.FC<PracticePlanSummaryProps> = ({
   isOpen,
   onClose,
   scoreTitle,
+  scorePath,
   instrumentName,
   sections,
   onAssignToStudent
 }) => {
-  const [studentName, setStudentName] = useState<string>('Alex Chen');
+  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState<string>('stud_alex');
+  const [studentName, setStudentName] = useState<string>('Alex Morgan');
   const [generalNotes, setGeneralNotes] = useState<string>(
-    'Focus 15–20 minutes daily. Practice each section as a musical chunk, then combine.'
+    'Focus 15–20 minutes daily. First shadow finger with audio demo, then record your official take!'
   );
   const [copied, setCopied] = useState<boolean>(false);
   const [assigned, setAssigned] = useState<boolean>(false);
+  const [isAssigning, setIsAssigning] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetchStudentsFromStorage().then(roster => {
+      if (roster && roster.length > 0) {
+        setStudents(roster);
+        setSelectedStudentId(roster[0].id);
+        setStudentName(roster[0].name);
+      }
+    });
+  }, []);
 
   if (!isOpen) return null;
 
@@ -87,10 +103,42 @@ export const PracticePlanSummary: React.FC<PracticePlanSummaryProps> = ({
     window.print();
   };
 
-  const handleAssign = () => {
-    onAssignToStudent?.(plan);
-    setAssigned(true);
-    setTimeout(() => setAssigned(false), 3000);
+  const handleAssign = async () => {
+    setIsAssigning(true);
+    try {
+      // Save each plan section as a distinct assigned exercise in shared storage
+      for (const pSec of planSections) {
+        const storedEx: StoredExercise = {
+          id: `ex_${Date.now()}_${selectedStudentId}_sec${pSec.sectionNumber}`,
+          title: `${scoreTitle} - ${pSec.title || `Section ${pSec.sectionNumber}`} (${pSec.startMeasure === pSec.endMeasure ? `Bar ${pSec.startMeasure}` : `Bars ${pSec.startMeasure}–${pSec.endMeasure}`})`,
+          scoreTitle,
+          scorePath: scorePath || '/neruda_trumpet_concerto_excerpt.musicxml',
+          instrumentId: 'trumpet',
+          instrumentName,
+          studentId: selectedStudentId,
+          studentName,
+          assignedDate: new Date().toISOString(),
+          status: 'assigned',
+          section: {
+            sectionNumber: pSec.sectionNumber,
+            title: pSec.title,
+            startMeasure: pSec.startMeasure,
+            endMeasure: pSec.endMeasure,
+            goals: pSec.goals
+          },
+          teacherGeneralNotes: generalNotes
+        };
+        await saveExerciseToStorage(storedEx);
+      }
+
+      onAssignToStudent?.(plan);
+      setAssigned(true);
+      setTimeout(() => setAssigned(false), 4000);
+    } catch (err) {
+      console.error('Failed to assign exercise to storage:', err);
+    } finally {
+      setIsAssigning(false);
+    }
   };
 
   return (
@@ -158,17 +206,40 @@ export const PracticePlanSummary: React.FC<PracticePlanSummaryProps> = ({
               </div>
             </div>
 
-            {/* Student Name */}
-            <div className="mt-4 flex items-center gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-800/80 print:border-none print:p-0 print:bg-transparent">
-              <User className="w-4 h-4 text-slate-400 print:hidden" />
-              <span className="text-xs text-slate-400 font-medium print:text-black">Student:</span>
-              <input
-                type="text"
-                value={studentName}
-                onChange={(e) => setStudentName(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-white print:text-black outline-none border-b border-dashed border-slate-700 focus:border-indigo-400 px-1 py-0.5"
-                placeholder="Student Name"
-              />
+            {/* Student Selector & Name */}
+            <div className="mt-4 flex flex-wrap items-center gap-3 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80 print:border-none print:p-0 print:bg-transparent">
+              <div className="flex items-center gap-1.5">
+                <User className="w-4 h-4 text-emerald-400 print:hidden" />
+                <span className="text-xs text-slate-400 font-medium print:text-black">Assign to Roster:</span>
+                <select
+                  value={selectedStudentId}
+                  onChange={(e) => {
+                    const st = students.find(s => s.id === e.target.value);
+                    if (st) {
+                      setSelectedStudentId(st.id);
+                      setStudentName(st.name);
+                    }
+                  }}
+                  className="bg-slate-900 text-xs font-bold text-emerald-300 px-2 py-1 rounded-lg border border-slate-700 outline-none cursor-pointer"
+                >
+                  {students.map(st => (
+                    <option key={st.id} value={st.id}>
+                      {st.name} ({st.instrument})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-400 font-medium print:text-black">Display Name:</span>
+                <input
+                  type="text"
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  className="bg-transparent text-xs font-semibold text-white print:text-black outline-none border-b border-dashed border-slate-700 focus:border-indigo-400 px-1 py-0.5"
+                  placeholder="Student Name"
+                />
+              </div>
             </div>
           </div>
 

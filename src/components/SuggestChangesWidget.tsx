@@ -34,7 +34,7 @@ interface SuggestChangesWidgetProps {
 }
 
 export const SuggestChangesWidget: React.FC<SuggestChangesWidgetProps> = ({ appMode = 'portal' }) => {
-  const [isExpanded, setIsExpanded] = useState<boolean>(true);
+  const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [isInspecting, setIsInspecting] = useState<boolean>(false);
   const [hoveredBox, setHoveredBox] = useState<HighlightBox | null>(null);
   
@@ -508,7 +508,7 @@ export const SuggestChangesWidget: React.FC<SuggestChangesWidgetProps> = ({ appM
         )}
 
         {/* Main Floating Bar */}
-        <div className="bg-slate-900/95 border border-indigo-500/40 text-slate-100 rounded-2xl shadow-2xl backdrop-blur-md px-2.5 py-2 flex items-center gap-1.5 text-xs">
+        <div className="bg-white/95 border border-slate-200 text-slate-700 rounded-2xl shadow-sm backdrop-blur-md px-2.5 py-2 flex items-center gap-1.5 text-xs">
           {/* Drag Handle */}
           <div
             data-drag-handle
@@ -536,7 +536,7 @@ export const SuggestChangesWidget: React.FC<SuggestChangesWidgetProps> = ({ appM
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-medium transition-all shadow-sm cursor-pointer ${
                   isInspecting 
                     ? 'bg-rose-500 hover:bg-rose-600 text-white animate-pulse ring-2 ring-rose-400/50' 
-                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
                 }`}
                 title="Click any element on screen to suggest a change (Shortcut: Alt + S)"
               >
@@ -575,7 +575,7 @@ export const SuggestChangesWidget: React.FC<SuggestChangesWidgetProps> = ({ appM
           ) : (
             <button
               onClick={() => setIsExpanded(true)}
-              className="flex items-center gap-1.5 font-medium text-indigo-400 hover:text-indigo-300 cursor-pointer"
+              className="flex items-center gap-1.5 font-medium text-slate-600 hover:text-blue-600 cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Suggest</span>

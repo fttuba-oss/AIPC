@@ -1,0 +1,58 @@
+/* Layout rules follow the available panel width, including detached windows. */
+.aipc-recordings, .aipc-sent, .aipc-exercises, .aipc-plans {
+  container-type: inline-size;
+  color-scheme: light;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.aipc-recordings { container-name: recordings; }
+.aipc-recordings-layout {
+  display: grid;
+  grid-template-columns: 210px 260px minmax(0, 1fr);
+  overflow: hidden;
+}
+.aipc-recordings-header { flex-wrap: wrap; gap: 12px; }
+.aipc-recordings-header > div { min-width: 0; flex-wrap: wrap; }
+.aipc-recordings-detail > div { width: 100%; }
+.aipc-takes-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.aipc-exercise-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.aipc-exercise-filters { width: 100%; }
+.aipc-exercise-filters > select { max-width: 100%; }
+.aipc-range-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.aipc-plan-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+.aipc-plan-fields input { width: 100%; min-width: 0; }
+.aipc-plan-fields > label { min-width: 0; }
+.aipc-exercise-card { box-shadow: none; }
+.aipc-exercise-card > div { min-width: 0; }
+.aipc-exercise-card p { overflow-wrap: anywhere; }
+:is(.aipc-recordings, .aipc-sent, .aipc-exercises, .aipc-plans) :is(button, input, select) {
+  min-height: 36px;
+}
+:is(.aipc-recordings, .aipc-sent, .aipc-exercises, .aipc-plans) button:focus-visible,
+:is(.aipc-recordings, .aipc-sent, .aipc-exercises, .aipc-plans) summary:focus-visible {
+  outline: 2px solid #0071e3;
+  outline-offset: 3px;
+}
+:is(.aipc-recordings, .aipc-sent, .aipc-exercises, .aipc-plans) input[type=checkbox] {
+  min-height: auto;
+  width: 18px;
+  height: 18px;
+}
+.aipc-recordings h2 { font-size: 24px; line-height: 1.25; }
+.aipc-recordings-detail h3, .aipc-plans h2 { font-size: 18px; color: #1d1d1f; }
+.aipc-recordings-detail textarea, .aipc-plans textarea { font-size: 16px; user-select: text; }
+@container recordings (max-width: 959px) {
+  .aipc-recordings-layout { grid-template-columns: 180px minmax(0, 1fr); grid-template-rows: minmax(160px, 35%) minmax(0, 1fr); }
+  .aipc-recordings-students { grid-column: 1; grid-row: 1 / 3; }
+  .aipc-recordings-sessions { grid-column: 2; grid-row: 1; border-right: 0; border-bottom: 1px solid #e5e5ea; }
+  .aipc-recordings-detail { grid-column: 2; grid-row: 2; padding: 20px; }
+}
+@container recordings (max-width: 599px) {
+  .aipc-recordings-layout { display: flex; flex-direction: column; overflow-y: auto; }
+  .aipc-recordings-students, .aipc-recordings-sessions { flex: none; max-height: 220px; border-right: 0; border-bottom: 1px solid #e5e5ea; }
+  .aipc-recordings-detail { flex: none; overflow: visible; padding: 16px; }
+  .aipc-recordings-header { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in { animation: none; }
+}

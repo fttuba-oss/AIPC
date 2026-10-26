@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  ArrowLeft, Square, Mic, MicOff, Video, Clock, Send, CheckCircle2, Play, Music, Sparkles, Target
+  ArrowLeft, Square, Mic, MicOff, Video, Clock, Send, CheckCircle2, Play, Pause, Music, Sparkles, Target, User, Sliders,
+  SkipBack, SkipForward, Calendar, Users, X, ChevronRight, HelpCircle
 } from 'lucide-react';
 import { StudentScoreViewer } from './StudentScoreViewer';
 import { type MusicalSection } from '../types/portal';
 import { StudentChatCompanion, type ChatMessage } from './StudentChatCompanion';
 import { AipcStrategyCoachModal } from './AipcStrategyCoachModal';
-import { mapDiagnosisToStrategyScenario } from '../strategies/strategyBridge';
-import { StudentAudioEngine } from '../utils/studentAudioEngine';
+
+import { MetronomeControls } from './MetronomeControls';
+
+import { meterAtBeat, pulseQuarterNotes, countInPulses } from '../utils/metronome';
+import { StudentAudioEngine, type MetronomeSubdivision } from '../utils/studentAudioEngine';
+import { EnsembleMixerPanel, type InstrumentTrack } from '../student/components/EnsembleMixerPanel';
 import { StudentAcousticInput } from '../utils/studentAcousticInput';
-import { secondsToBeats, mapInstrumentToSoundfont, getTargetPartAndNotes, type ScorePlaybackData } from '../utils/scorePlaybackParser';
-import { RhythmDiagnosticEngine, type RhythmOnset, type RhythmDiagnosisResult, type RhythmAccuracyRating } from '../diagnostics';
+import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartAndNotes, type ScorePlaybackData, type NoteEvent } from '../utils/scorePlaybackParser';
+import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
 import {
   MediaRecordingEngine,
   getOrCreateActiveSession,
@@ -18,6 +23,8 @@ import {
   saveRecordedTake,
   submitSectionToTeacher,
   formatDuration,
+  uploadRecordingTake,
+  saveSubmissionToStorage,
   type RecordedTake,
   type PracticeSession
 } from '../utils/studentRecordingManager';
@@ -35,6 +42,9 @@ interface StudentPracticeViewProps {
   onSelectSection?: (section: MusicalSection) => void;
   onExit: () => void;
   onViewSubmissions?: () => void;
+  exerciseId?: string;
+  studentId?: string;
+  studentName?: string;
 }
 
 export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
@@ -50,11 +60,14 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   onSelectSection,
   onExit,
   onViewSubmissions: _onViewSubmissions,
+  exerciseId,
+  studentId,
+  studentName,
 }) => {
   // ------------------------------------------------------------------
   // Section Navigation & Practice Agenda State
   // ------------------------------------------------------------------
-  const [viewMode, setViewMode] = useState<'focus' | 'full'>('focus');
+  const [viewMode, setViewMode] = useState<'focus' | 'full'>('full');
   const [startFromBeat, setStartFromBeat] = useState<number | null>(null);
   const [startFromMeasure, setStartFromMeasure] = useState<number | null>(null);
 
@@ -156,15 +169,101 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [sectionTimeSeconds, setSectionTimeSeconds] = useState<number>(0);
   const sectionTimerRef = useRef<any>(null);
 
-  // Audio & Metronome state: Solo Reference MIDI is OFF by default in practice
-  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(true);
+  // Audio & Metronome state: Solo Reference MIDI is ON by default matching mock-up
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+  // Metronome subdivision state matching mock-up (eighth notes active)
+  const [subdivision, setSubdivision] = useState<MetronomeSubdivision>('eighth');
+  const [isMinusOneActive, setIsMinusOneActive] = useState<boolean>(false);
+  const [masterVolume, setMasterVolume] = useState<number>(75);
+  const [isMixerCollapsed, setIsMixerCollapsed] = useState<boolean>(false);
+
+  // ---- Parts of THIS score: which part I'm practising, and which parts I practise with ----
+  const scoreParts = useMemo(() => listScoreParts(xmlContent), [xmlContent]);
+  const [myPartId, setMyPartId] = useState<string | null>(null);
+  const myPartIdRef = useRef<string | null>(null);
+  myPartIdRef.current = myPartId;
+
+  const FALLBACK_TRACKS: InstrumentTrack[] = [
+    { id: 'flute1', name: 'Flute 1', section: 'Woodwinds', volume: 80, isMuted: false, isVisible: true },
+    { id: 'flute2', name: 'Flute 2', section: 'Woodwinds', volume: 80, isMuted: false, isVisible: true, isUserPart: true },
+  ];
+  const [tracks, setTracks] = useState<InstrumentTrack[]>(FALLBACK_TRACKS);
+  const tracksRef = useRef<InstrumentTrack[]>(tracks);
+  tracksRef.current = tracks;
+
+  // Build the mixer from the real score; the student's own part is on and visible, others start off
+  useEffect(() => {
+    if (scoreParts.length === 0) return;
+    const mine = matchPartToInstrument(scoreParts, instrumentName);
+    setMyPartId(mine);
+    setTracks(scoreParts.map(sp => ({
+      id: sp.id,
+      name: sp.name,
+      section: sp.section,
+      volume: 80,
+      isMuted: sp.id !== mine,
+      isVisible: sp.id === mine,
+      isUserPart: sp.id === mine,
+    })));
+  }, [scoreParts, instrumentName]);
+
+  const handleMyPartChange = (id: string) => {
+    setMyPartId(id);
+    setTracks(prev => prev.map(t => {
+      if (t.id === id) return { ...t, isMuted: false, isVisible: true, isUserPart: true };
+      // the part I just left behind drops back to an ordinary, switched-off track
+      if (t.isUserPart) return { ...t, isMuted: true, isVisible: false, isUserPart: false };
+      return t;
+    }));
+  };
+  const myPartName = scoreParts.find(p => p.id === myPartId)?.name || instrumentName;
+  const visiblePartIds = useMemo(
+    () => (scoreParts.length > 0 ? tracks.filter(t => t.isVisible).map(t => t.id) : null),
+    [tracks, scoreParts.length]
+  );
+
+  /**
+   * The reference MIDI: every part of the score, each tagged with its own instrument voice and part id.
+   * Which parts are actually heard (ticked in "Practise with", my own part left out while I play) is
+   * decided live by the audio engine's part mix, so ticking/unticking works during playback.
+   * Falls back to my part when the score has no parts.
+   */
+  const buildBackingNotes = (ownNotes: NoteEvent[], _forDemo: boolean): NoteEvent[] => {
+    const sp = liveParamsRef.current.scorePlaybackData || scorePlaybackData;
+    if (!sp || scoreParts.length === 0) return ownNotes;
+    const out: NoteEvent[] = [];
+    for (const part of sp.parts) {
+      const instrument = mapInstrumentToSoundfont(part.name);
+      for (const n of part.notes) out.push({ ...n, instrument, partId: part.id });
+    }
+    return out;
+  };
+
+  const handleSubdivisionChange = (sub: MetronomeSubdivision) => {
+    setSubdivision(sub);
+    audioEngineRef.current?.setSubdivision(sub);
+  };
+
+  const [countInEnabled, setCountInEnabled] = useState(true);
   const [isMetronomeMuted, setIsMetronomeMuted] = useState<boolean>(false);
   const [intendedBpm, setIntendedBpm] = useState<number>(120);
   const [currentBpm, setCurrentBpm] = useState<number>(120);
   const [tempoPreset, setTempoPreset] = useState<'slow' | 'steady' | 'target' | 'custom'>('target');
 
   // Practice & Playback state
+  const [countInTotal, setCountInTotal] = useState(4);
   const [playbackPhase, setPlaybackPhase] = useState<'idle' | 'count_in' | 'playing' | 'review'>('idle');
+
+  // Push the "Practise with" mix to the engine: ticked parts sound at their slider level,
+  // unticked parts are silent, and my own part is silent while "Mute my part" is on (but heard in a demo).
+  useEffect(() => {
+    const mix: Record<string, number> = {};
+    for (const t of tracks) {
+      const ownSilenced = t.id === myPartId && isMinusOneActive && !isListeningDemoRef.current;
+      mix[t.id] = t.isMuted || ownSilenced ? 0 : Math.max(0, t.volume / 80);
+    }
+    audioEngineRef.current?.setPartMix(mix);
+  }, [tracks, myPartId, isMinusOneActive, playbackPhase]);
   const [countInNumber, setCountInNumber] = useState<number | null>(null);
   const [scorePlaybackData, setScorePlaybackData] = useState<ScorePlaybackData | null>(null);
 
@@ -228,7 +327,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [playbackProgress, setPlaybackProgress] = useState<number>(0);
 
   // Input Mode (Acoustic Mic vs iPad Screen Tap Pad)
-  const [inputMode, setInputMode] = useState<'mic' | 'tap'>('mic');
+  const [inputMode, setInputMode] = useState<'mic' | 'tap'>('tap');
   const inputModeRef = useRef<'mic' | 'tap'>(inputMode);
   inputModeRef.current = inputMode;
   const [micLevel, setMicLevel] = useState<number>(0);
@@ -239,6 +338,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [recordingMode, setRecordingMode] = useState<'audio' | 'video'>('audio');
   const [isRecordingTake, setIsRecordingTake] = useState<boolean>(false);
   const [recentTake, setRecentTake] = useState<RecordedTake | null>(null);
+  const latestTakeBlobRef = useRef<Blob | null>(null);
   const [showTakeModal, setShowTakeModal] = useState<boolean>(false);
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
 
@@ -348,12 +448,6 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     recorderRef.current = new MediaRecordingEngine();
   }
 
-  // Rhythm Diagnostic Layer (Decoupled & Modular)
-  const rhythmDiagnosticEngineRef = useRef<RhythmDiagnosticEngine>(new RhythmDiagnosticEngine());
-  const [rhythmDiagnosis, setRhythmDiagnosis] = useState<RhythmDiagnosisResult | null>(null);
-  const [liveEvaluations, setLiveEvaluations] = useState<Record<number, RhythmAccuracyRating>>({});
-  const evaluatedNotesSetRef = useRef<Set<number>>(new Set());
-  const onsetsRef = useRef<RhythmOnset[]>([]);
   const playbackStartTimeRef = useRef<number | null>(null);
   const isListeningDemoRef = useRef<boolean>(false);
 
@@ -378,15 +472,6 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     frontDoorStepRef.current = frontDoorStep;
   }, [frontDoorStep]);
 
-  // Dynamic Strategy Proposal from Diagnosis
-  const activeStrategyProposal = useMemo(() => {
-    if (!rhythmDiagnosis) return null;
-    return mapDiagnosisToStrategyScenario(
-      rhythmDiagnosis,
-      currentBpm || intendedBpm,
-      activeMeasureRange
-    );
-  }, [rhythmDiagnosis, currentBpm, intendedBpm, activeMeasureRange]);
 
   const handleLaunchCoachStrategy = useCallback((scenario?: string, measures?: [number, number]) => {
     if (scenario) setCoachStrategyId(scenario);
@@ -415,49 +500,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     };
   });
 
-  // Instant Live Onset Evaluation: colors notes in real-time as you play!
-  const handleLiveOnset = useCallback((elapsedSec: number, source: 'mic' | 'tap', energy?: number) => {
-    // Demonstration playback is reference listening only — do not evaluate student onsets
-    if (isListeningDemoRef.current) return;
-
-    const validSec = Math.max(0, elapsedSec);
-    onsetsRef.current.push({
-      timestampSeconds: validSec,
-      source,
-      energy,
-    });
-
-    const {
-      scorePlaybackData: spData,
-      instrumentName: instName,
-      activeMeasureRange: mRange,
-      viewMode: vMode,
-      startFromBeat: sBeat,
-      currentBpm: cBpm,
-      intendedBpm: iBpm,
-    } = liveParamsRef.current;
-
-    const { targetNotes, sectionStartBeat } = getTargetPartAndNotes(spData, instName, mRange);
-
-    const match = rhythmDiagnosticEngineRef.current.evaluateLiveOnset({
-      onsetSeconds: validSec,
-      expectedNotes: targetNotes,
-      tempos: spData?.tempos,
-      startBeat: sectionStartBeat,
-      currentBpm: cBpm,
-      intendedBpm: iBpm,
-      alreadyEvaluatedIndices: evaluatedNotesSetRef.current,
-      liveEvaluations,
-    });
-
-    if (match) {
-      evaluatedNotesSetRef.current.add(match.noteIndex);
-      setLiveEvaluations(prev => ({
-        ...prev,
-        [match.noteIndex]: match.rating,
-      }));
-    }
-  }, []);
+  // Live onset detection/evaluation removed: no diagnostics are run while practising.
+  // Live onset detection/evaluation removed: no diagnostics are run while practising.
 
   // Live stopwatch for active section practice time
   useEffect(() => {
@@ -476,6 +520,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     };
   }, [session.sessionId, activeSectionId, activeSectionTitle, activeMeasureRange]);
 
+  const readScorePlaybackTime = useCallback(() => audioEngineRef.current?.getScorePlaybackSeconds() ?? null, []);
+
   // Audio Engine Callbacks
   useEffect(() => {
     const engine = audioEngineRef.current;
@@ -484,70 +530,28 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     engine.setOnTick((beatNumber, isCountIn) => {
       if (isCountIn) {
         setCountInNumber(beatNumber);
-        setPlaybackPhase('count_in');
+        setPlaybackPhase(prev => (prev !== 'count_in' ? 'count_in' : prev));
       } else {
-        setCountInNumber(null);
-        setPlaybackPhase('playing');
+        setCountInNumber(prev => (prev !== null ? null : prev));
+        setPlaybackPhase(prev => (prev !== 'playing' ? 'playing' : prev));
         if (playbackStartTimeRef.current === null) {
           playbackStartTimeRef.current = Date.now();
         }
       }
     });
 
-    engine.setOnTimeUpdate((timeSec, _totalSec, elapsedRealSec) => {
+    engine.setOnTimeUpdate((timeSec) => {
       setPlaybackProgress(timeSec);
-      const {
-        scorePlaybackData: spData,
-        instrumentName: instName,
-        activeMeasureRange: mRange,
-        viewMode: _vMode,
-        startFromBeat: _sBeat,
-        currentBpm: cBpm,
-        intendedBpm: iBpm,
-      } = liveParamsRef.current;
+      const { scorePlaybackData: spData } = liveParamsRef.current;
 
-      if (spData?.tempos && timeSec >= 0) {
-        const curBeat = secondsToBeats(timeSec, spData.tempos);
-        const liveTempo = getTempoAtBeat(curBeat);
-        setIntendedBpm(prev => {
-          if (prev !== liveTempo) {
-            if (tempoPreset === 'target') {
-              setCurrentBpm(liveTempo);
-            }
-            return liveTempo;
-          }
-          return prev;
-        });
-
-        // Real-time missed note detection as playhead moves past notes (only during practice attempts, not demo listening)
-        const elapsedSec = (elapsedRealSec !== undefined && elapsedRealSec > 0)
-          ? elapsedRealSec
-          : (playbackStartTimeRef.current !== null ? (Date.now() - playbackStartTimeRef.current) / 1000 : 0);
-
-        if (!isListeningDemoRef.current && elapsedSec > 0) {
-          const { targetNotes, sectionStartBeat } = getTargetPartAndNotes(spData, instName, mRange);
-
-          const missed = rhythmDiagnosticEngineRef.current.findMissedNotes({
-            currentElapsedSeconds: elapsedSec,
-            expectedNotes: targetNotes,
-            tempos: spData?.tempos,
-            startBeat: sectionStartBeat,
-            currentBpm: cBpm,
-            intendedBpm: iBpm,
-            alreadyEvaluatedIndices: evaluatedNotesSetRef.current,
-          });
-
-          if (missed.length > 0) {
-            missed.forEach(idx => evaluatedNotesSetRef.current.add(idx));
-            setLiveEvaluations(prev => {
-              const next = { ...prev };
-              missed.forEach(idx => {
-                next[idx] = 'Miss';
-              });
-              return next;
-            });
-          }
-        }
+      if (spData && timeSec >= 0) {
+        const beat = secondsToBeats(timeSec, spData.tempos);
+        const meter = meterAtBeat(spData.metronomeMeasures || [], beat, spData.initialTimeSignature);
+        setCountInTotal(countInPulses(meter.numerator, meter.denominator));
+        setCurrentBpm(engine.getCurrentBpm());
+        let scoreTempo = spData.intendedBpm;
+        for (const tempo of spData.tempos || []) { if (tempo.beat > beat) break; scoreTempo = tempo.bpm; }
+        setIntendedBpm(scoreTempo);
       }
     });
 
@@ -562,33 +566,19 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     if (!input) return;
 
     input.setCallbacks(
-      (_time, energy) => {
+      (_time) => {
         setTapCount(c => c + 1);
         setTapFlash(true);
         setTimeout(() => setTapFlash(false), 120);
-
-        const transportSec = audioEngineRef.current?.getElapsedPlaybackSeconds() ?? 0;
-        if (transportSec > 0) {
-          handleLiveOnset(transportSec, 'mic', energy);
-        } else if (playbackStartTimeRef.current !== null) {
-          const elapsed = (Date.now() - playbackStartTimeRef.current) / 1000;
-          if (elapsed >= -0.4) {
-            handleLiveOnset(elapsed, 'mic', energy);
-          }
-        }
       },
       (level) => {
         setMicLevel(level);
       }
     );
 
-    if (inputMode === 'mic') {
-      input.start();
-    } else {
-      input.stop();
-    }
+    input.stop();
 
-  }, [inputMode, handleLiveOnset]);
+  }, [inputMode]);
 
   // Discreet Developer Tap Simulator (Supports spacebar key and tap button)
   const triggerDevTap = useCallback(() => {
@@ -602,19 +592,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       acousticInputRef.current?.stop();
       setMicLevel(0);
     }
-
-    if (playbackPhase === 'idle') return;
-
-    const transportSec = audioEngineRef.current?.getElapsedPlaybackSeconds() ?? 0;
-    if (transportSec > 0) {
-      handleLiveOnset(transportSec, 'tap');
-    } else if (playbackStartTimeRef.current !== null) {
-      const elapsedSec = (Date.now() - playbackStartTimeRef.current) / 1000;
-      if (elapsedSec >= -0.4) {
-        handleLiveOnset(elapsedSec, 'tap');
-      }
-    }
-  }, [playbackPhase, handleLiveOnset, isAudioMuted]);
+  }, []);
 
   // Keyboard Spacebar listener for discreet developer testing
   useEffect(() => {
@@ -634,7 +612,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
   // Tempo Calculations & Dynamic Adjustment
   const handleBpmChange = (newBpm: number) => {
-    const clamped = Math.max(30, Math.min(260, Math.round(newBpm)));
+    const clamped = Math.max(30, Math.min(260, Math.round(newBpm * 1000) / 1000));
     setCurrentBpm(clamped);
     setTempoPreset('custom');
     audioEngineRef.current?.setBpm(clamped);
@@ -705,26 +683,26 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     isListeningDemoRef.current = false;
     setPlaybackPhase('count_in');
     setIsRecordingTake(false);
-    onsetsRef.current = [];
-    setRhythmDiagnosis(null);
-    setLiveEvaluations({});
-    evaluatedNotesSetRef.current.clear();
     setPlaybackProgress(-0.1);
 
     const spData = liveParamsRef.current.scorePlaybackData || scorePlaybackData;
     const instName = liveParamsRef.current.instrumentName || instrumentName;
     const mRange = liveParamsRef.current.activeMeasureRange || activeMeasureRange;
 
-    const { activePart, targetNotes, sectionStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
+    const { activePart, targetNotes, sectionStartBeat: partStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
       spData,
       instName,
-      mRange
-    );
+      mRange, myPartIdRef.current);
     const activeNotes = activePart?.notes || [];
-    const playbackStartBeat = (viewMode === 'full' && startFromBeat !== null) ? startFromBeat : sectionStartBeat;
-    const totalBeats = Math.max(4, totalSectionEndBeat - sectionStartBeat);
+    // Full-score view plays from bar 1 (or the bar the student clicked); a focused section starts at its first note
+    const sectionStartBeat = viewMode === 'full' ? (spData?.measureStartBeats?.[0] ?? 0) : partStartBeat;
+    const playbackStartBeat = startFromBeat !== null ? startFromBeat : sectionStartBeat;
+    const totalBeats = Math.max(1e-6, totalSectionEndBeat - sectionStartBeat);
 
     // Ground count-in tempo dynamically in the section being attempted
+    const playbackMeter = meterAtBeat(spData?.metronomeMeasures || [], playbackStartBeat, spData?.initialTimeSignature);
+    const countIn = countInPulses(playbackMeter.numerator, playbackMeter.denominator);
+    setCountInTotal(countIn);
     const sectionTargetTempo = getTempoAtBeat(playbackStartBeat);
     let effectiveBpm: number;
 
@@ -757,21 +735,15 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     }
     
     // Deterministic start time: count-in is 4 beats at effectiveBpm
-    const countInMs = (4 * (60 / effectiveBpm)) * 1000;
-    playbackStartTimeRef.current = Date.now() + countInMs;
+    playbackStartTimeRef.current = null; // Set by the first audible music tick, after preload and count-in.
 
-    if (inputMode === 'mic' && acousticInputRef.current && !acousticInputRef.current.getIsRunning()) {
-      acousticInputRef.current.start();
-    }
 
     setChatMessages(prev => [
       ...prev,
       {
         id: `practice_${Date.now()}`,
         sender: 'mascot',
-        text: inputMode === 'mic'
-          ? `Section tempo is ${effectiveBpm} BPM. Play along with the metronome click!`
-          : `Section tempo is ${effectiveBpm} BPM. Tap along with each note on the keyboard!`,
+        text: `Section tempo is ${effectiveBpm} BPM. Play along with the metronome click!`,
         timestamp: 'Now',
       },
     ]);
@@ -784,21 +756,22 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
-        timeSignature: [4, 4],
+        timeSignature: [playbackMeter.numerator, playbackMeter.denominator],
         startMeasure: activeMeasureRange[0],
         endMeasure: activeMeasureRange[1],
         startBeat: sectionStartBeat,
         startFromBeat: playbackStartBeat,
         totalBeats,
-        countInBeats: 4,
+        countInBeats: countInEnabled ? countIn : 0,
         instrumentName,
-        notes: activeNotes,
-        tempos: scorePlaybackData?.tempos,
+        notes: buildBackingNotes(activeNotes, false),
+        tempos: spData?.tempos,
+        metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm
     );
 
-    setPlaybackPhase('playing');
+    // The audio-clock tick callback changes phase after the count-in.
   };
 
   // 2. Listen Demo Flow (Groundtruth reference playback - not scored as a student run)
@@ -806,25 +779,25 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     isListeningDemoRef.current = true;
     setPlaybackPhase('count_in');
     setIsRecordingTake(false);
-    onsetsRef.current = [];
-    setRhythmDiagnosis(null);
-    setLiveEvaluations({});
-    evaluatedNotesSetRef.current.clear();
     setPlaybackProgress(-0.1);
 
     const spData = liveParamsRef.current.scorePlaybackData || scorePlaybackData;
     const instName = liveParamsRef.current.instrumentName || instrumentName;
     const mRange = liveParamsRef.current.activeMeasureRange || activeMeasureRange;
 
-    const { activePart, targetNotes, sectionStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
+    const { activePart, targetNotes, sectionStartBeat: partStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
       spData,
       instName,
-      mRange
-    );
+      mRange, myPartIdRef.current);
     const activeNotes = activePart?.notes || [];
-    const playbackStartBeat = (viewMode === 'full' && startFromBeat !== null) ? startFromBeat : sectionStartBeat;
-    const totalBeats = Math.max(4, totalSectionEndBeat - sectionStartBeat);
+    // Full-score view plays from bar 1 (or the bar the student clicked); a focused section starts at its first note
+    const sectionStartBeat = viewMode === 'full' ? (spData?.measureStartBeats?.[0] ?? 0) : partStartBeat;
+    const playbackStartBeat = startFromBeat !== null ? startFromBeat : sectionStartBeat;
+    const totalBeats = Math.max(1e-6, totalSectionEndBeat - sectionStartBeat);
 
+    const playbackMeter = meterAtBeat(spData?.metronomeMeasures || [], playbackStartBeat, spData?.initialTimeSignature);
+    const countIn = countInPulses(playbackMeter.numerator, playbackMeter.denominator);
+    setCountInTotal(countIn);
     const sectionTargetTempo = getTempoAtBeat(playbackStartBeat);
     let effectiveBpm = currentBpm;
     if (tempoPreset === 'target' || Math.abs(currentBpm - intendedBpm) < 2) {
@@ -838,8 +811,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       effectiveBpm = Math.round(sectionTargetTempo * 0.85);
     }
 
-    const countInMs = (4 * (60 / effectiveBpm)) * 1000;
-    playbackStartTimeRef.current = Date.now() + countInMs;
+    playbackStartTimeRef.current = null; // Set by the first audible music tick, after preload and count-in.
 
     setChatMessages(prev => [
       ...prev,
@@ -859,21 +831,22 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
-        timeSignature: [4, 4],
+        timeSignature: [playbackMeter.numerator, playbackMeter.denominator],
         startMeasure: activeMeasureRange[0],
         endMeasure: activeMeasureRange[1],
         startBeat: sectionStartBeat,
         startFromBeat: playbackStartBeat,
         totalBeats,
-        countInBeats: 4,
+        countInBeats: countInEnabled ? countIn : 0,
         instrumentName,
-        notes: activeNotes,
-        tempos: scorePlaybackData?.tempos,
+        notes: buildBackingNotes(activeNotes, true),
+        tempos: spData?.tempos,
+        metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm
     );
 
-    setPlaybackPhase('playing');
+    // The audio-clock tick callback changes phase after the count-in.
   };
 
   // Repertoire Front Door: Option A (Silent Shadow Fingering on Real Notes)
@@ -904,7 +877,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {
         id: `opt_a_test_${Date.now()}`,
         sender: 'mascot',
-        text: `🎺 Repertoire Front Door (Option A Rehearsal): Play on your instrument now at target tempo (${intendedBpm} BPM)! Let's test if your shadow rehearsal locked in.`,
+        text: `♪ Repertoire Front Door (Option A Rehearsal): Play on your instrument now at target tempo (${intendedBpm} BPM)! Let's test if your shadow rehearsal locked in.`,
         timestamp: 'Just now',
       }
     ]);
@@ -1009,26 +982,26 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     isListeningDemoRef.current = false;
     setPlaybackPhase('count_in');
     setIsRecordingTake(true);
-    onsetsRef.current = [];
-    setRhythmDiagnosis(null);
-    setLiveEvaluations({});
-    evaluatedNotesSetRef.current.clear();
     setPlaybackProgress(-0.1);
 
     const spData = liveParamsRef.current.scorePlaybackData || scorePlaybackData;
     const instName = liveParamsRef.current.instrumentName || instrumentName;
     const mRange = liveParamsRef.current.activeMeasureRange || activeMeasureRange;
 
-    const { activePart, targetNotes, sectionStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
+    const { activePart, targetNotes, sectionStartBeat: partStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
       spData,
       instName,
-      mRange
-    );
+      mRange, myPartIdRef.current);
     const activeNotes = activePart?.notes || [];
-    const playbackStartBeat = (viewMode === 'full' && startFromBeat !== null) ? startFromBeat : sectionStartBeat;
-    const totalBeats = Math.max(4, totalSectionEndBeat - sectionStartBeat);
+    // Full-score view plays from bar 1 (or the bar the student clicked); a focused section starts at its first note
+    const sectionStartBeat = viewMode === 'full' ? (spData?.measureStartBeats?.[0] ?? 0) : partStartBeat;
+    const playbackStartBeat = startFromBeat !== null ? startFromBeat : sectionStartBeat;
+    const totalBeats = Math.max(1e-6, totalSectionEndBeat - sectionStartBeat);
 
     // Ground count-in tempo dynamically in the section being attempted
+    const playbackMeter = meterAtBeat(spData?.metronomeMeasures || [], playbackStartBeat, spData?.initialTimeSignature);
+    const countIn = countInPulses(playbackMeter.numerator, playbackMeter.denominator);
+    setCountInTotal(countIn);
     const sectionTargetTempo = getTempoAtBeat(playbackStartBeat);
     let effectiveBpm = currentBpm;
     if (tempoPreset === 'target' || Math.abs(currentBpm - intendedBpm) < 2) {
@@ -1043,12 +1016,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     }
 
     // Deterministic start time: count-in is 4 beats at effectiveBpm
-    const countInMs = (4 * (60 / effectiveBpm)) * 1000;
-    playbackStartTimeRef.current = Date.now() + countInMs;
+    playbackStartTimeRef.current = null; // Set by the first audible music tick, after preload and count-in.
 
-    if (inputMode === 'mic' && acousticInputRef.current && !acousticInputRef.current.getIsRunning()) {
-      acousticInputRef.current.start();
-    }
 
     setChatMessages(prev => [
       ...prev,
@@ -1071,21 +1040,22 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
-        timeSignature: [4, 4],
+        timeSignature: [playbackMeter.numerator, playbackMeter.denominator],
         startMeasure: activeMeasureRange[0],
         endMeasure: activeMeasureRange[1],
         startBeat: sectionStartBeat,
         startFromBeat: playbackStartBeat,
         totalBeats,
-        countInBeats: 4,
+        countInBeats: countInEnabled ? countIn : 0,
         instrumentName,
-        notes: activeNotes,
-        tempos: scorePlaybackData?.tempos,
+        notes: buildBackingNotes(activeNotes, false),
+        tempos: spData?.tempos,
+        metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm
     );
 
-    setPlaybackPhase('playing');
+    // The audio-clock tick callback changes phase after the count-in.
   };
 
   // 4. Stop Playback / Finish Take
@@ -1122,13 +1092,9 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       const wasShadow = repertoireShadowMode;
       isListeningDemoRef.current = false;
       setPlaybackProgress(0);
-      setRhythmDiagnosis(null);
-      setLiveEvaluations({});
-      evaluatedNotesSetRef.current.clear();
-      onsetsRef.current = [];
 
       if (wasShadow) {
-        if (!activeStrategyProposal) {
+        {
           setChatMessages(prev => [
             ...prev,
             {
@@ -1137,7 +1103,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               text: "🎧 Shadow Fingering pass complete! Choose your next step:",
               timestamp: 'Just now',
               actionOptions: [
-                { key: 'play_instrument_test', label: '🎺 Play on Instrument Now', icon: '🎺', variant: 'primary' },
+                { key: 'play_instrument_test', label: '♪ Play on Instrument Now', icon: '♪', variant: 'primary' },
                 { key: 'repertoire_slow_tempo', label: '🐢 Slower Tempo (-20 BPM)', icon: '🐢', variant: 'amber' },
                 { key: 'repertoire_shadow_fingering', label: '🔁 Shadow Again', icon: '🔁', variant: 'secondary' },
               ]
@@ -1166,184 +1132,13 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       return;
     }
 
-    const spData = liveParamsRef.current.scorePlaybackData || scorePlaybackData;
-    const instName = liveParamsRef.current.instrumentName || instrumentName;
-    const mRange = liveParamsRef.current.activeMeasureRange || activeMeasureRange;
-    const cBpm = liveParamsRef.current.currentBpm || currentBpm;
-    const iBpm = liveParamsRef.current.intendedBpm || intendedBpm;
-
-    const { activePart, targetNotes, sectionStartBeat, totalSectionEndBeat } = getTargetPartAndNotes(
-      spData,
-      instName,
-      mRange
-    );
-    const activeNotes = activePart?.notes || [];
-
-    console.log('[handleFinishPlayback]', {
-      instrumentName: instName,
-      activePartName: activePart?.name,
-      totalNotesInPart: activeNotes.length,
-      targetNotesCount: targetNotes.length,
-      activeMeasureRange: mRange,
-      sectionStartBeat,
-      totalSectionEndBeat,
-      onsetsCount: onsetsRef.current.length,
-    });
-
-    // Evaluate all notes across the active range so every notehead shows its status (attempted or not attempted)
-    const diagnosis = rhythmDiagnosticEngineRef.current.evaluate({
-      expectedNotes: targetNotes,
-      onsets: onsetsRef.current,
-      tempos: spData?.tempos,
-      startBeat: sectionStartBeat,
-      endBeat: totalSectionEndBeat,
-      startMeasure: mRange[0],
-      endMeasure: mRange[1],
-      currentBpm: cBpm,
-      intendedBpm: iBpm,
-    });
-
-    console.log('[handleFinishPlayback diagnosis]', {
-      evaluationsCount: Object.keys(diagnosis.evaluations).length,
-      evaluations: diagnosis.evaluations,
-      summaryText: diagnosis.summaryText,
-    });
-
-    setRhythmDiagnosis(diagnosis);
-
-    const currentStep = frontDoorStepRef.current;
-    const topMeasure = diagnosis.problemMeasureNumbers[0] ?? mRange[0];
-    const hasMistake = diagnosis.problemMeasureNumbers.length > 0 || diagnosis.overallAccuracyPercent < 75;
-
-    let mascotMessageText = diagnosis.summaryText;
-    let actionOptions = diagnosis.remedyActions.map(r => ({
-      key: r.actionKey,
-      label: r.label,
-      icon: r.icon,
-      variant: r.variant,
-    }));
-
-    if (currentStep === 'option_a_testing') {
-      if (hasMistake) {
-        // Option A rehearsal done, student still makes mistake -> proceed to Option B (-20 BPM)
-        setFrontDoorStep('option_b_suggested');
-        frontDoorStepRef.current = 'option_b_suggested';
-        const slowBpm = Math.max(40, iBpm - 20);
-
-        mascotMessageText = `⚠️ Rehearsal check at full tempo (${cBpm} BPM): Timing or notes wavered (${diagnosis.overallAccuracyPercent}% accuracy) in Bar(s) ${diagnosis.problemMeasureNumbers.join(', ') || mRange.join('-')}. Let's proceed to Option B: Slower Tempo (-20 BPM = ${slowBpm} BPM) so your fingers and brain can lock into the pulse without rushing!`;
-        actionOptions = [
-          { key: 'repertoire_slow_tempo', label: `🐢 Start Option B (${slowBpm} BPM)`, icon: '🐢', variant: 'primary' },
-          { key: 'repertoire_shadow_fingering', label: '🎧 Shadow Finger Again', icon: '🎧', variant: 'secondary' },
-          { key: 'play_instrument_test', label: '🔁 Rehearse at Full Tempo', icon: '🔁', variant: 'secondary' },
-        ];
-      } else {
-        // Student succeeded after Option A!
-        setFrontDoorStep('idle');
-        frontDoorStepRef.current = 'idle';
-        mascotMessageText = `🎯 Brilliant rehearsal run! Accuracy was ${diagnosis.overallAccuracyPercent}% at ${cBpm} BPM. Your shadow practice locked your fingers in! Ready to record an official take for your teacher or continue forward.`;
-        actionOptions = [
-          { key: 'record_take_now', label: '🔴 Record Take for Teacher', icon: '🔴', variant: 'primary' },
-          { key: 'play_instrument_test', label: '🔁 Rehearse Again', icon: '🔁', variant: 'secondary' },
-          ...(nextSection ? [{ key: `next_sec_${nextSection.id}`, label: `Next Section (Bars ${nextSection.startMeasure}–${nextSection.endMeasure}) ➡️`, icon: '➡️', variant: 'success' as const }] : []),
-        ];
-      }
-    } else if (currentStep === 'option_b_practicing' || currentStep === 'tempo_ladder') {
-      // Option B Rehearsal finished: see if it gets better!
-      if (!hasMistake) {
-        // It got better!
-        if (cBpm >= iBpm) {
-          setFrontDoorStep('idle');
-          frontDoorStepRef.current = 'idle';
-          mascotMessageText = `🏆 Outstanding progress! You successfully climbed all the way back to target tempo (${iBpm} BPM) with ${diagnosis.overallAccuracyPercent}% accuracy! Ready to record your take for your teacher.`;
-          actionOptions = [
-            { key: 'record_take_now', label: '🔴 Record Take for Teacher', icon: '🔴', variant: 'primary' },
-            { key: 'rehearse_again', label: '🔁 Rehearse Again at Target Tempo', icon: '🔁', variant: 'secondary' },
-            ...(nextSection ? [{ key: `next_sec_${nextSection.id}`, label: `Next Section ➡️`, icon: '➡️', variant: 'success' as const }] : []),
-          ];
-        } else {
-          // Progressive pick up tempo: student can choose +3, +5 (recommended), or +10 BPM
-          setFrontDoorStep('tempo_ladder');
-          frontDoorStepRef.current = 'tempo_ladder';
-          const step3 = Math.min(iBpm, cBpm + 3);
-          const step5 = Math.min(iBpm, cBpm + 5);
-          const step10 = Math.min(iBpm, cBpm + 10);
-          mascotMessageText = `🌟 Much better! Timing stabilized at ${cBpm} BPM (${diagnosis.overallAccuracyPercent}% accuracy). Now let's progressively pick up the tempo back toward target speed (${iBpm} BPM). Choose your tempo increase:`;
-          actionOptions = [
-            { key: 'tempo_step_5', label: `⚡ +5 BPM (${step5} BPM - Recommended)`, icon: '⚡', variant: 'primary' },
-            { key: 'tempo_step_3', label: `🌱 +3 BPM (${step3} BPM - Gradual)`, icon: '🌱', variant: 'secondary' },
-            { key: 'tempo_step_10', label: `🚀 +10 BPM (${step10} BPM - Fast Track)`, icon: '🚀', variant: 'amber' },
-            { key: 'record_take_now', label: '🔴 Record Take Now', icon: '🔴', variant: 'secondary' },
-          ];
-        }
-      } else {
-        // Did not get better at reduced tempo. Check if complex rhythm problem:
-        const hasSyncopationOrTies = targetNotes.some((n: any) => n.isTie || n.isTuplet || (n.beat % 1 !== 0 && n.beat % 0.5 !== 0));
-        const isGenuineRhythmDeficit = diagnosis.disambiguation?.likelyCause === 'genuine_rhythm_deficit';
-        const isOffbeatProblem = diagnosis.summaryText.toLowerCase().includes('offbeat') ||
-                                 diagnosis.summaryText.toLowerCase().includes('syncopat') ||
-                                 diagnosis.summaryText.toLowerCase().includes('tie') ||
-                                 diagnosis.summaryText.toLowerCase().includes('drift');
-
-        const isComplexRhythm = isGenuineRhythmDeficit || hasSyncopationOrTies || isOffbeatProblem;
-
-        if (isComplexRhythm) {
-          // Escalate to Rhythm Gym
-          let strategyScenario = 'rushing';
-          if (diagnosis.measureDiagnoses[topMeasure]?.primaryIssue === 'missed_notes') {
-            strategyScenario = 'syncopation';
-          } else if (diagnosis.measureDiagnoses[topMeasure]?.primaryIssue === 'uneven') {
-            strategyScenario = 'subdivision';
-          } else if (diagnosis.measureDiagnoses[topMeasure]?.primaryIssue === 'dragging') {
-            strategyScenario = 'execution';
-          }
-
-          mascotMessageText = `⚠️ Complex Rhythm Pattern Detected: Even at slower tempo (${cBpm} BPM), timing is unstable (${diagnosis.summaryText}). Slower tempo alone cannot solve this syncopation/tie pattern—let's take a quick 60-second pit stop in the Rhythm Portal to isolate and lock into the pulse!`;
-          actionOptions = [
-            { 
-              key: `start_strategy_${strategyScenario}_${topMeasure}`, 
-              label: '🛠️ Enter Rhythm Portal (Isolate Pulse)', 
-              icon: '🛠️', 
-              variant: 'primary' 
-            },
-            { key: 'tempo_step_down_5', label: `🐢 Drop Tempo -5 BPM (${Math.max(40, cBpm - 5)} BPM)`, icon: '🐢', variant: 'secondary' },
-            { key: 'repertoire_shadow_fingering', label: '🎧 Shadow Finger with Audio', icon: '🎧', variant: 'secondary' },
-          ];
-        } else {
-          // Other kinds of problems: fingering bottleneck, note transitions -> tempo ladder down then up
-          setFrontDoorStep('tempo_ladder');
-          frontDoorStepRef.current = 'tempo_ladder';
-          const down5 = Math.max(40, cBpm - 5);
-          const down10 = Math.max(40, cBpm - 10);
-          mascotMessageText = `🎹 Note & Fingering Transition Bottleneck: Your pulse is fine, but the finger shifts or note transitions need more stabilization (${diagnosis.summaryText}). Let's ladder tempo down another step to find your solid baseline, then ladder back up!`;
-          actionOptions = [
-            { key: 'tempo_step_down_5', label: `🐢 Drop Tempo -5 BPM (${down5} BPM)`, icon: '🐢', variant: 'primary' },
-            { key: 'tempo_step_down_10', label: `🐢 Drop Tempo -10 BPM (${down10} BPM)`, icon: '🐢', variant: 'secondary' },
-            { key: 'repertoire_shadow_fingering', label: '🎧 Silent Shadow Fingering', icon: '🎧', variant: 'secondary' },
-          ];
-        }
-      }
-    }
-
-    // When Repertoire Front Door (activeStrategyProposal) is active, it handles the interactive
-    // progression and options directly. Suppress competing diagnostic messages and conflicting action chips in Toots.
-    if (!activeStrategyProposal) {
-      setChatMessages(prev => [
-        ...prev,
-        {
-          id: `diag_${Date.now()}`,
-          sender: 'mascot',
-          text: mascotMessageText,
-          timestamp: 'Just now',
-          highlight: diagnosis.problemMeasureNumbers.length > 0 || onsetsRef.current.length === 0,
-          actionOptions,
-        },
-      ]);
-    }
+    // No diagnostics in this version: finishing playback only wraps up the take.
 
     if (isRecordingTake) {
       setIsRecordingTake(false);
       const result = await recorderRef.current?.stop();
       if (result) {
+        latestTakeBlobRef.current = result.blob;
         const take = saveRecordedTake(
           session.sessionId,
           activeSectionId,
@@ -1512,606 +1307,487 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     }
   };
 
-  // Submit take to teacher
-  const handleSubmitTake = () => {
+  // Submit take to teacher & shared studio storage
+  const handleSubmitTake = async () => {
     submitSectionToTeacher(session.sessionId, sectionId);
     setIsSubmitted(true);
     setShowTakeModal(false);
+
+    // 1. Upload audio recording file to shared storage if available
+    let uploadedMediaUrl: string | undefined = undefined;
+    if (latestTakeBlobRef.current && recentTake) {
+      const filename = `take_${session.sessionId}_${recentTake.id}.webm`;
+      const url = await uploadRecordingTake(latestTakeBlobRef.current, filename);
+      if (url) uploadedMediaUrl = url;
+    }
+
+    // 2. Link student, exercise, practice session, and diagnostics into StoredSubmission
+    const activeStudentId = studentId || session.studentId || 'stud_alex';
+    const activeStudentName = studentName || session.studentName || 'Alex Morgan';
+
+    await saveSubmissionToStorage({
+      id: `sub_${session.sessionId}_${activeSectionId}`,
+      exerciseId: exerciseId || '',
+      sessionId: session.sessionId,
+      studentId: activeStudentId,
+      studentName: activeStudentName,
+      pieceName: pieceTitle,
+      instrumentName: instrumentName,
+      submittedAt: new Date().toISOString(),
+      sectionId: activeSectionId,
+      sectionName: activeSectionTitle,
+      measureRange: activeMeasureRange,
+      timeSpentSeconds: sectionTimeSeconds,
+      takes: recentTake ? [
+        {
+          id: recentTake.id,
+          takeNumber: recentTake.takeNumber,
+          timestamp: recentTake.timestamp,
+          mode: recentTake.mode,
+          mediaFile: uploadedMediaUrl || recentTake.blobUrl || '',
+          durationSeconds: recentTake.durationSeconds,
+          tempoUsed: recentTake.tempoUsed,
+          selfRating: recentTake.selfRating
+        }
+      ] : [],
+    });
+
     setChatMessages(prev => [
       ...prev,
       {
         id: `submit_${Date.now()}`,
         sender: 'mascot',
-        text: `🚀 Sent to your teacher! They will review your take and time spent (${formatDuration(sectionTimeSeconds)}).`,
+        text: `🚀 Sent to your teacher! Your take recording, practicing stopwatch (${formatDuration(sectionTimeSeconds)}), and diagnostic results are saved in the shared studio storage.`,
         timestamp: 'Just now',
         highlight: true,
       },
     ]);
   };
 
+  // ------------------------------------------------------------------
+  // Student Portal Navigation & Timeline Controls
+  // ------------------------------------------------------------------
+  const [activeNavTab, setActiveNavTab] = useState<'score' | 'plan' | 'recordings'>('score');
+  const [isCoachDrawerOpen, setIsCoachDrawerOpen] = useState<boolean>(false);
+
+  const timelineStartBeat = viewMode === 'full' ? 0
+    : scorePlaybackData?.measureStartBeatByNumber?.[activeMeasureRange[0]]
+      ?? scorePlaybackData?.measureStartBeats?.[activeMeasureRange[0] - 1] ?? 0;
+  const timelineStartSec = scorePlaybackData ? beatToSeconds(timelineStartBeat, scorePlaybackData.tempos) : 0;
+  const totalDurationSec = useMemo(() => {
+    if (!scorePlaybackData) return 0;
+    const measures = scorePlaybackData.metronomeMeasures || [];
+    const end = viewMode === 'full' ? measures.at(-1)?.endBeat
+      : measures.find(m => m.measureNumber === activeMeasureRange[1])?.endBeat;
+    return end === undefined ? scorePlaybackData.durationInSeconds : beatToSeconds(end, scorePlaybackData.tempos);
+  }, [scorePlaybackData, viewMode, activeMeasureRange]);
+
+  const handleTimelineScrub = (seconds: number) => {
+    if (!scorePlaybackData) return;
+    const sec = Math.max(timelineStartSec, Math.min(totalDurationSec, seconds));
+    const beat = secondsToBeats(sec, scorePlaybackData.tempos);
+    setPlaybackProgress(sec);
+    setStartFromBeat(beat);
+    if (playbackPhase !== 'idle') audioEngineRef.current?.seekToScoreBeat(beat);
+  };
+  const handleRestartPlayback = () => handleTimelineScrub(timelineStartSec);
+  const handleSkipForward = () => {
+    const data = scorePlaybackData;
+    if (!data) return;
+    const beat = secondsToBeats(Math.max(timelineStartSec, playbackProgress), data.tempos);
+    const next = data.metronomeMeasures?.find(m => m.startBeat > beat + 1e-7)?.startBeat;
+    handleTimelineScrub(next === undefined ? totalDurationSec : beatToSeconds(next, data.tempos));
+  };
+
+  const displayedMeter = meterAtBeat(scorePlaybackData?.metronomeMeasures || [],
+    playbackProgress > 0 ? secondsToBeats(playbackProgress, scorePlaybackData?.tempos || []) : (startFromBeat ?? scorePlaybackData?.measureStartBeatByNumber?.[activeMeasureRange[0]] ?? scorePlaybackData?.measureStartBeats?.[activeMeasureRange[0] - 1] ?? 0),
+    scorePlaybackData?.initialTimeSignature);
+  const usesQuarterPulse = pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator) === 1;
+  const displayedPulse = pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator);
+  const currentScoreBeat = secondsToBeats(Math.max(0, playbackProgress), scorePlaybackData?.tempos || []);
+  const beatWithinBar = ('startBeat' in displayedMeter && typeof displayedMeter.startBeat === 'number' ? currentScoreBeat - displayedMeter.startBeat : currentScoreBeat) / displayedPulse;
+  const activeMetronomeBeat = playbackPhase === 'count_in' ? countInNumber : playbackPhase === 'playing'
+    ? Math.floor(beatWithinBar % countInPulses(displayedMeter.numerator, displayedMeter.denominator)) + 1 : null;
+
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 select-none overflow-hidden">
+    <div className="flex h-screen w-screen bg-[#f5f5f7] text-slate-800 select-none overflow-hidden font-sans">
       {/* ------------------------------------------------------------------ */}
-      {/* Top Header Bar (iPad Clean & Tactile) */}
+      {/* Region 1: Narrow Left Navigation */}
       {/* ------------------------------------------------------------------ */}
-      <header className="h-14 shrink-0 px-4 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shadow-xs z-20">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onExit}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 font-semibold text-xs rounded-xl border border-slate-300 dark:border-slate-700 transition-all active:scale-95"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Teacher Portal</span>
-          </button>
+      <aside className="w-56 flex flex-col justify-between py-6 px-5 select-none shrink-0 border-r border-slate-200/60">
+        <div>
+          {/* Logo */}
+          <div className="mb-7 pl-1">
+            <h1 className="text-[24px] font-semibold tracking-tight text-[#111c2e]">
+              AIPC
+            </h1>
+          </div>
 
-          <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 hidden sm:block" />
-
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-bold text-sm md:text-base text-slate-900 dark:text-white">
-                {viewMode === 'full' ? 'Full Piece Practice' : activeSectionTitle}
-              </h1>
-              <span className="text-[11px] font-bold bg-amber-100 text-amber-900 dark:bg-amber-950/80 dark:text-amber-300 px-2 py-0.5 rounded-md">
-                {viewMode === 'full' ? `Bars 1–${totalScoreMeasures}` : `Bars ${activeMeasureRange[0]}–${activeMeasureRange[1]}`}
-              </span>
-              {viewMode === 'full' && startFromMeasure && (
-                <span className="text-[10px] font-bold bg-sky-100 text-sky-900 dark:bg-sky-950/80 dark:text-sky-300 px-2 py-0.5 rounded-md">
-                  From Bar {startFromMeasure}
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              {pieceTitle} • {instrumentName}
+          {/* Piece Title and Student Part */}
+          <div className="mb-7 pl-1">
+            <p className="text-sm text-slate-500 font-medium mb-1 tracking-tight">Today's practice</p>
+            <h2 className="text-[17px] font-bold text-slate-900 leading-snug tracking-tight">
+              {(pieceTitle || 'Beautiful Danxia').replace(/\s+for\s+Concert\s+Band/i, '')}
+            </h2>
+            <p className="text-[14px] text-slate-700 font-medium mt-0.5">
+              {instrumentName || 'Flute 2'}
             </p>
           </div>
+
+          {/* Primary Navigation Tabs */}
+          <nav className="space-y-2">
+            <button
+              onClick={() => setActiveNavTab('score')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer ${
+                activeNavTab === 'score'
+                  ? 'bg-[#e2edfc] text-[#0071e3]'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <Music className="w-4.5 h-4.5 text-[#0071e3]" />
+              <span>Score</span>
+            </button>
+
+            <button
+              onClick={() => setActiveNavTab('plan')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer ${
+                activeNavTab === 'plan'
+                  ? 'bg-[#e2edfc] text-[#0071e3]'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <Calendar className="w-4.5 h-4.5 text-slate-500" />
+              <span>Practice plan</span>
+            </button>
+
+            <button
+              onClick={() => setActiveNavTab('recordings')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer ${
+                activeNavTab === 'recordings'
+                  ? 'bg-[#e2edfc] text-[#0071e3]'
+                  : 'text-slate-700 hover:text-slate-900 hover:bg-white/60'
+              }`}
+            >
+              <Users className="w-4.5 h-4.5 text-slate-500" />
+              <span>Shared recordings</span>
+            </button>
+          </nav>
         </div>
 
-        {/* Practice Timer & Submission status */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => handleLaunchCoachStrategy()}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-            title="Open AIPC Strategy Coach (Fading Ladder & Cross Rhythms)"
-          >
-            <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
-            <span>AIPC Strategy Coach</span>
-          </button>
-
-          {isSubmitted && (
-            <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-1 rounded-xl border border-emerald-300 dark:border-emerald-700">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Submitted</span>
-            </span>
-          )}
-        </div>
-      </header>
+      </aside>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Main Practice Workspace (Full-Width Score with Bottom Companion Dock) */}
+      {/* Region 2: Central Score Workspace + Top Toolbar */}
       {/* ------------------------------------------------------------------ */}
-      <main className="flex-1 flex flex-col p-2.5 sm:p-3 gap-2 overflow-hidden min-h-0">
-        {/* Full-Width Score Area (Hero Element) */}
-        <div className="flex-1 flex flex-col min-h-0 relative w-full">
-          <StudentScoreViewer
-            xmlUrl={xmlUrl}
-            xmlContent={xmlContent}
-            startMeasure={activeMeasureRange[0]}
-            endMeasure={activeMeasureRange[1]}
-            sectionStartMeasure={currentSection ? currentSection.startMeasure : measureRange[0]}
-            sectionEndMeasure={currentSection ? currentSection.endMeasure : measureRange[1]}
-            totalMeasures={totalScoreMeasures}
-            viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
-            instrumentPartName={instrumentName}
-            playbackProgress={playbackProgress}
-            isPlaying={playbackPhase !== 'idle'}
-            noteEvaluations={
-              (rhythmDiagnosis && Object.keys(rhythmDiagnosis.evaluations).length > 0)
-                ? rhythmDiagnosis.evaluations
-                : (Object.keys(liveEvaluations).length > 0 ? liveEvaluations : undefined)
-            }
-            problemMeasures={rhythmDiagnosis?.problemMeasureNumbers}
-            onClearEvaluations={() => {
-              setRhythmDiagnosis(null);
-              setLiveEvaluations({});
-              evaluatedNotesSetRef.current.clear();
-            }}
-            onScoreParsed={(data) => {
-              setScorePlaybackData(data);
-              const targetStartBeat = data.measureStartBeats?.[activeMeasureRange[0] - 1] ?? ((activeMeasureRange[0] - 1) * 4);
-              let secTempo = data.intendedBpm || 120;
-              if (data.tempos && data.tempos.length > 0) {
-                for (const t of data.tempos) {
-                  if (t.beat <= targetStartBeat + 0.01) {
-                    secTempo = t.bpm;
-                  } else {
-                    break;
-                  }
-                }
-              }
-              setIntendedBpm(secTempo);
-              setCurrentBpm(secTempo);
-              setTempoPreset('target');
-              audioEngineRef.current?.preloadSoundfont(mapInstrumentToSoundfont(instrumentName));
-            }}
-            onSeek={(targetSec, beat, measureNum) => {
-              setPlaybackProgress(targetSec);
-              if (beat !== undefined) setStartFromBeat(beat);
-              if (measureNum !== undefined) setStartFromMeasure(measureNum);
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden p-3 pl-0 pr-3">
+        {/* Top Toolbar matching Reference Mock-up */}
+        <header className="relative z-30 min-h-14 py-2 gap-3 flex-wrap bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/80 shadow-xs px-4 flex items-center justify-between shrink-0 mb-3 select-none">
+          {/* Left Group: Playback & Timeline Scrubber */}
+          <div className="flex items-center gap-3">
+            {/* |< Restart */}
+            <button
+              onClick={handleRestartPlayback}
+              className="text-slate-600 hover:text-slate-950 transition-colors p-1 cursor-pointer"
+              title="Restart from beginning"
+            >
+              <SkipBack className="w-4.5 h-4.5 fill-current" />
+            </button>
 
-              // Automatically match tempo to the exact bar the cursor is pointing to
-              if (beat !== undefined) {
-                const targetBarTempo = getTempoAtBeat(beat);
-                setIntendedBpm(targetBarTempo);
-                setCurrentBpm(targetBarTempo);
-                setTempoPreset('target');
-                audioEngineRef.current?.setBpm(targetBarTempo);
-              }
+            {/* Royal Blue Play/Pause */}
+            <button
+              onClick={playbackPhase !== 'idle' ? handleFinishPlayback : handleStartPractice}
+              className="w-9 h-9 rounded-full bg-[#0071e3] hover:bg-blue-700 text-white flex items-center justify-center shadow-md shadow-blue-500/25 transition-transform active:scale-95 cursor-pointer"
+              title={playbackPhase !== 'idle' ? 'Pause Practice' : 'Start Practice'}
+            >
+              {playbackPhase !== 'idle' ? (
+                <Pause className="w-4 h-4 fill-current" />
+              ) : (
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+              )}
+            </button>
 
-              if (playbackPhase !== 'idle') {
-                audioEngineRef.current?.seekToScoreBeat(beat ?? 0);
-              }
-            }}
+            {/* >| Skip */}
+            <button
+              onClick={handleSkipForward}
+              className="text-slate-600 hover:text-slate-950 transition-colors p-1 cursor-pointer"
+              title="Skip forward"
+            >
+              <SkipForward className="w-4.5 h-4.5 fill-current" />
+            </button>
+
+            {/* Timeline Text & Scrubber Slider */}
+            <div className="flex items-center gap-2.5 ml-1">
+              <span className="text-[13.5px] font-mono font-bold text-slate-800 tracking-tight select-none">
+                {formatDuration(Math.max(0, playbackProgress))} / {formatDuration(totalDurationSec)}
+              </span>
+              <div className="w-32 sm:w-44 flex items-center">
+                <input
+                  type="range"
+                  aria-label="Playback position"
+                  min={timelineStartSec}
+                  max={totalDurationSec}
+                  step="0.1"
+                  value={Math.max(timelineStartSec, Math.min(totalDurationSec, playbackProgress))}
+                  onChange={(e) => handleTimelineScrub(Number(e.target.value))}
+                  className="w-full h-1.5 bg-[#d6e4f8] rounded-lg appearance-none cursor-pointer accent-[#0071e3]"
+                />
+              </div>
+            </div>
+          </div>
+
+          <MetronomeControls
+            quarterBpm={currentBpm}
+            numerator={displayedMeter.numerator}
+            denominator={displayedMeter.denominator}
+            subdivision={subdivision}
+            muted={isMetronomeMuted}
+            countIn={countInEnabled}
+            activeBeat={activeMetronomeBeat}
+            onBpmChange={handleBpmChange}
+            onSubdivisionChange={handleSubdivisionChange}
+            onMutedChange={muted => { setIsMetronomeMuted(muted); audioEngineRef.current?.setMetronomeMuted(muted); }}
+            onCountInChange={setCountInEnabled}
           />
+        </header>
 
-          {/* Visual Count-In: Sleek, non-intrusive floating indicator (Score remains 100% visible) */}
-          {countInNumber !== null && (
+        {/* Central Card: Score, Plan or Shared Recordings */}
+        <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden bg-white/90 backdrop-blur-xs rounded-2xl border border-slate-200/80 shadow-xs">
+          {activeNavTab === 'score' && (
             <>
-              {/* Subtle pulsing accent line at the top of the score container */}
-              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-500/10 via-amber-500 to-amber-500/10 shadow-[0_0_10px_rgba(245,158,11,0.6)] z-30 pointer-events-none transition-all duration-150" />
+              {/* Sheet Music Score Area */}
+              <div className="flex-1 overflow-auto min-h-0 relative">
+                <StudentScoreViewer
+                  xmlUrl={xmlUrl}
+                  xmlContent={xmlContent}
+                  startMeasure={activeMeasureRange[0]}
+                  endMeasure={activeMeasureRange[1]}
+                  sectionStartMeasure={currentSection ? currentSection.startMeasure : measureRange[0]}
+                  sectionEndMeasure={currentSection ? currentSection.endMeasure : measureRange[1]}
+                  totalMeasures={totalScoreMeasures}
+                  viewMode={viewMode}
+                  onViewModeChange={handleViewModeChange}
+                  instrumentPartName={myPartName}
+                  instrumentPartId={myPartId}
+                  visiblePartIds={visiblePartIds}
+                  playbackProgress={playbackProgress}
+                  getPlaybackTime={readScorePlaybackTime}
+                  isPlaying={playbackPhase !== 'idle'}
+                  onScoreParsed={(data) => {
+                    setScorePlaybackData(data);
+                    const targetStartBeat = data.measureStartBeats?.[activeMeasureRange[0] - 1] ?? ((activeMeasureRange[0] - 1) * 4);
+                    let secTempo = data.intendedBpm || 96;
+                    if (data.tempos && data.tempos.length > 0) {
+                      for (const t of data.tempos) {
+                        if (t.beat <= targetStartBeat + 0.01) {
+                          secTempo = t.bpm;
+                        } else {
+                          break;
+                        }
+                      }
+                    }
+                    setIntendedBpm(secTempo);
+                    setCurrentBpm(secTempo);
+                    setTempoPreset('target');
+                    audioEngineRef.current?.preloadSoundfont(mapInstrumentToSoundfont(instrumentName));
+                    audioEngineRef.current?.preloadInstruments(data.parts.map(p => mapInstrumentToSoundfont(p.name)));
+                  }}
+                  onSeek={(targetSec, beat, measureNum) => {
+                    setPlaybackProgress(targetSec);
+                    if (beat !== undefined) setStartFromBeat(beat);
+                    if (measureNum !== undefined) setStartFromMeasure(measureNum);
 
-              {/* Floating Count-In Pill docked cleanly below score header */}
-              <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-in fade-in slide-in-from-top-2 duration-150">
-                <div className="flex items-center gap-3 px-4 py-2 bg-slate-900/90 dark:bg-slate-800/95 backdrop-blur-md rounded-full shadow-xl border border-amber-500/40 text-white select-none">
-                  {/* Status badge */}
-                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-400">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
-                    <span>Count-in</span>
+                    let targetBarTempo = currentBpm;
+                    if (beat !== undefined) {
+                      targetBarTempo = getTempoAtBeat(beat);
+                      setIntendedBpm(targetBarTempo);
+                      setCurrentBpm(targetBarTempo);
+                      setTempoPreset('target');
+                      audioEngineRef.current?.setBpm(targetBarTempo);
+                    }
+
+                    if (playbackPhase !== 'idle') {
+                      audioEngineRef.current?.seekToScoreBeat(beat ?? 0, targetBarTempo);
+                    }
+                  }}
+                />
+
+                {/* Non-intrusive floating count-in badge */}
+                {countInNumber !== null && (
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-in fade-in duration-150">
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 backdrop-blur-md rounded-full shadow-lg border border-blue-500/40 text-white select-none text-xs">
+                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                      <span className="font-bold text-blue-300">Count-in: Beat {countInNumber} of {countInTotal}</span>
+                    </div>
                   </div>
+                )}
+              </div>
 
-                  <div className="h-4 w-px bg-slate-700/80" />
-
-                  {/* 4 Beat Pips with dynamic active highlights */}
-                  <div className="flex items-center gap-1.5">
-                    {[1, 2, 3, 4].map((beat) => {
-                      const isCurrent = beat === countInNumber;
-                      const isPast = beat < countInNumber;
-                      return (
-                        <div
-                          key={beat}
-                          className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-xs transition-all duration-150 ${
-                            isCurrent
-                              ? 'bg-amber-400 text-amber-950 scale-110 shadow-md shadow-amber-400/50 ring-2 ring-amber-300'
-                              : isPast
-                              ? 'bg-amber-900/60 text-amber-300 border border-amber-600/40'
-                              : 'bg-slate-800 text-slate-400 border border-slate-700/80'
-                          }`}
-                        >
-                          {beat}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <div className="h-4 w-px bg-slate-700/80" />
-
-                  {/* Clear text status */}
-                  <span className="text-xs font-bold text-amber-300 whitespace-nowrap">
-                    Beat {countInNumber} of 4
-                  </span>
-                </div>
+              {/* Single Small Floating Record Pill Control Beneath the Score */}
+              <div className="py-2.5 flex justify-center shrink-0 border-t border-slate-100 bg-[#fdfdfd]/95 select-none">
+                <button
+                  onClick={playbackPhase === 'idle' ? handleStartRecordingTake : handleFinishPlayback}
+                  className="px-5 py-2 rounded-full border border-slate-200/90 bg-white hover:bg-slate-50 shadow-xs flex items-center gap-2.5 text-[13px] font-semibold text-slate-800 transition-all active:scale-95 cursor-pointer hover:shadow-sm"
+                >
+                  <span className={`w-3 h-3 rounded-full bg-[#ef4444] shadow-2xs ${isRecordingTake ? 'animate-ping' : ''}`} />
+                  <span>{isRecordingTake ? 'Stop recording' : 'Record practice'}</span>
+                </button>
               </div>
             </>
           )}
-        </div>
 
-        {/* Horizontal Front Door Intervention Ribbon (when active) */}
-        {activeStrategyProposal && (
-          <div className="px-3 py-2 bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950/80 border border-purple-500/40 rounded-2xl shadow-md flex flex-wrap items-center justify-between gap-2 shrink-0 animate-in fade-in select-none">
-            <div className="flex items-center gap-2 flex-wrap min-w-0">
-              <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-purple-300 shrink-0">
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>Repertoire Front Door</span>
-              </div>
-              <span className="text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full border border-purple-500/30 shrink-0">
-                Bars {activeStrategyProposal.targetMeasures[0]}–{activeStrategyProposal.targetMeasures[1]}
-              </span>
-
-              {/* Diagnostic Sieve Notice */}
-              {rhythmDiagnosis?.disambiguation ? (
-                <span className="text-[11px] font-bold text-amber-300 bg-slate-950/70 px-2.5 py-0.5 rounded-lg border border-slate-700/60 truncate flex items-center gap-1">
-                  <span>
-                    {rhythmDiagnosis.disambiguation.likelyCause === 'cognitive_speed_load' && '🎯 Speed Comfort Limit'}
-                    {rhythmDiagnosis.disambiguation.likelyCause === 'mechanical_note_bottleneck' && '🎹 Note/Fingering Bottleneck'}
-                    {rhythmDiagnosis.disambiguation.likelyCause === 'genuine_rhythm_deficit' && '⚠️ Confirmed Rhythm Deficit'}
-                    {rhythmDiagnosis.disambiguation.likelyCause === 'inconclusive' && '🎼 Timing Irregularity'}
+          {/* Practice Plan Tab View */}
+          {activeNavTab === 'plan' && (
+            <div className="flex-1 overflow-auto p-6 space-y-4">
+              <div className="max-w-xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div>
+                    <h3 className="font-bold text-base text-slate-900">Practice Plan & Goals</h3>
+                    <p className="text-xs text-slate-500">Assigned by Band Director for {instrumentName}</p>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-200">
+                    Bars {activeMeasureRange[0]}–{activeMeasureRange[1]}
                   </span>
-                  <span className="text-slate-300 font-normal text-[10px] hidden sm:inline">• {rhythmDiagnosis.disambiguation.reason}</span>
-                </span>
-              ) : (
-                <span className="text-[11px] text-slate-300 hidden md:inline">
-                  Work on real notes first before isolating.
-                </span>
-              )}
-            </div>
-
-            {/* Front-Door Strategy Actions */}
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {(repertoireShadowMode || frontDoorStep === 'option_a_shadowed') && playbackPhase === 'idle' ? (
-                <button
-                  onClick={handleStartOptionATest}
-                  className="py-1.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 text-white font-black text-xs rounded-xl shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>Step 2: Play on Instrument Now</span>
-                </button>
-              ) : frontDoorStep === 'option_b_suggested' && playbackPhase === 'idle' ? (
-                <button
-                  onClick={handleStartRepertoireSlow}
-                  className="py-1.5 px-3 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 text-white font-black text-xs rounded-xl shadow-sm transition active:scale-95 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Play className="w-3 h-3 fill-current" />
-                  <span>Start Option B ({Math.max(40, intendedBpm - 20)} BPM)</span>
-                </button>
-              ) : frontDoorStep === 'tempo_ladder' && playbackPhase === 'idle' ? (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold text-emerald-300 hidden sm:inline">Tempo:</span>
+                </div>
+                <div className="space-y-3">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-sm font-bold text-slate-400 r">Teacher Objective</span>
+                    <p className="text-xs font-medium text-slate-800">
+                      Lock into 8th/16th subdivision clicks and anchor syncopations without rushing bar 28.
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-sm font-bold text-slate-400 r">Recommended Tempo</span>
+                    <p className="text-xs font-semibold text-slate-800 font-mono">{usesQuarterPulse ? '♩' : pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator) === 1.5 ? '♩.' : 'Beat'} = {Math.round(currentBpm / pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator))} BPM (Allegro con spirito)</p>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-sm font-bold text-slate-400 r">Ensemble Backing</span>
+                    <p className="text-xs text-slate-600">
+                      Practice with the full Woodwinds/Ensemble accompaniment. Use Minus-One mode to mute Flute 2 so you can hear your own tone clearly against the ensemble.
+                    </p>
+                  </div>
+                </div>
+                <div className="pt-2">
                   <button
-                    onClick={() => handleQuickAction('tempo_step_3')}
-                    className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[10px] font-bold border border-slate-600 active:scale-95 cursor-pointer"
+                    onClick={() => setActiveNavTab('score')}
+                    className="w-full py-2.5 rounded-xl bg-[#0071e3] hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition cursor-pointer"
                   >
-                    +3 BPM
-                  </button>
-                  <button
-                    onClick={() => handleQuickAction('tempo_step_5')}
-                    className="py-1 px-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold border border-emerald-500 active:scale-95 cursor-pointer"
-                  >
-                    +5 BPM
-                  </button>
-                  <button
-                    onClick={() => handleQuickAction('tempo_step_10')}
-                    className="py-1 px-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold border border-amber-500 active:scale-95 cursor-pointer"
-                  >
-                    +10 BPM
+                    Return to Score
                   </button>
                 </div>
-              ) : (
-                <div className="flex items-center gap-1.5">
+              </div>
+            </div>
+          )}
+
+          {/* Shared Recordings Tab View */}
+          {activeNavTab === 'recordings' && (
+            <div className="flex-1 overflow-auto p-6 space-y-4">
+              <div className="max-w-2xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div>
+                    <h3 className="font-bold text-base text-slate-900">Shared Recordings & Studio Submissions</h3>
+                    <p className="text-xs text-slate-500">Access your recorded practice takes and teacher feedback</p>
+                  </div>
                   <button
-                    onClick={handleStartRepertoireShadow}
-                    className="py-1.5 px-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 text-white font-bold text-xs rounded-xl shadow-xs transition active:scale-95 flex items-center gap-1 cursor-pointer"
+                    onClick={() => setActiveNavTab('score')}
+                    className="text-xs font-bold text-[#0071e3] hover:underline cursor-pointer"
                   >
-                    <span>🎧 Option A (Shadow)</span>
-                  </button>
-                  <button
-                    onClick={handleStartRepertoireSlow}
-                    className="py-1.5 px-2.5 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 text-white font-bold text-xs rounded-xl shadow-xs transition active:scale-95 flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>🐢 Option B (-20 BPM)</span>
+                    Back to Score
                   </button>
                 </div>
-              )}
 
-              {rhythmDiagnosis?.disambiguation?.likelyCause === 'genuine_rhythm_deficit' && (
-                <button
-                  onClick={() => handleLaunchCoachStrategy(activeStrategyProposal.scenarioId, activeStrategyProposal.targetMeasures)}
-                  className="text-[11px] font-bold underline cursor-pointer flex items-center gap-1 text-amber-400 hover:text-amber-300 animate-pulse transition ml-1"
-                >
-                  <Target className="w-3 h-3" />
-                  <span>Rhythm Portal</span>
-                </button>
-              )}
+                {recentTake ? (
+                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
+                          #{recentTake.takeNumber}
+                        </span>
+                        <div>
+                          <h4 className="font-bold text-xs text-slate-900">{pieceTitle} — Take #{recentTake.takeNumber}</h4>
+                          <p className="text-sm text-slate-500">{new Date(recentTake.timestamp).toLocaleTimeString()} • {recentTake.durationSeconds}s • {recentTake.mode.toUpperCase()}</p>
+                        </div>
+                      </div>
+                      {isSubmitted ? (
+                        <span className="flex items-center gap-1 text-sm font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Submitted
+                        </span>
+                      ) : (
+                        <button
+                          onClick={handleSubmitTake}
+                          className="px-3.5 py-1.5 bg-[#0071e3] hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer"
+                        >
+                          Submit to Teacher
+                        </button>
+                      )}
+                    </div>
+                    <div className="rounded-lg overflow-hidden bg-slate-950 p-2">
+                      <audio src={recentTake.blobUrl} controls className="w-full h-8" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-10 space-y-2">
+                    <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-xl">
+                      🎙️
+                    </div>
+                    <p className="text-sm font-semibold text-slate-700">No recordings saved yet</p>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      Press "Record practice" beneath the score to record an audio or video take. Your submitted takes will appear here.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setActiveNavTab('score');
+                        handleStartRecordingTake();
+                      }}
+                      className="mt-3 px-4 py-2 rounded-xl bg-[#0071e3] text-white text-xs font-bold shadow-xs hover:bg-blue-700 cursor-pointer"
+                    >
+                      Start Recording Practice
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Compact Horizontal Companion Dock (Toots) */}
-        <StudentChatCompanion
-          instrumentName={instrumentName}
-          messages={chatMessages}
-          onQuickAction={handleQuickAction}
-          onSendMessage={(text) => {
-            setChatMessages(prev => [
-              ...prev,
-              {
-                id: `user_${Date.now()}`,
-                sender: 'student',
-                text,
-                timestamp: 'Just now'
-              }
-            ]);
-            setTimeout(() => {
-              setChatMessages(prev => [
-                ...prev,
-                {
-                  id: `mascot_${Date.now()}`,
-                  sender: 'mascot',
-                  text: `Great question! Focus on a steady breath and locked-in subdivision. Let's run ${sectionTitle}!`,
-                  timestamp: 'Just now',
-                  actionOptions: [
-                    { key: 'listen_demo', label: 'Play Demo', icon: '👂', variant: 'primary' },
-                    { key: 'ready_to_play', label: 'Start Now', icon: '🎺', variant: 'amber' }
-                  ]
-                }
-              ]);
-            }, 600);
-          }}
-          isListening={isRecordingTake || playbackPhase === 'playing'}
-          activeSectionName={sectionTitle}
-          recordingMode={recordingMode}
-          videoPreviewRef={videoPreviewRef}
-          cameraStatus={cameraStatus}
-          cameraStream={cameraStream}
-        />
-      </main>
+          )}
+        </div>
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Compact Status Bar: Acoustic Mic Level & Discreet Dev Spacebar / Tap Simulator */}
+      {/* Region 3: Compact Right Panel: Practise with */}
       {/* ------------------------------------------------------------------ */}
-      <section className="px-4 py-1.5 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-        {/* Left: Instrument Mic with ON/OFF Toggle */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              const nextMode = inputMode === 'mic' ? 'tap' : 'mic';
-              setInputMode(nextMode);
-              if (nextMode === 'tap') {
-                acousticInputRef.current?.stop();
-                setMicLevel(0);
-              } else {
-                acousticInputRef.current?.start();
-              }
+      <div className="py-3 pr-3 shrink-0 h-full">
+        <div className="h-full rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
+          <EnsembleMixerPanel
+            userInstrument={instrumentName}
+                parts={scoreParts.map(p => ({ id: p.id, name: p.name }))}
+                myPartId={myPartId}
+                onMyPartChange={handleMyPartChange}
+            tracks={tracks}
+            onTrackVolumeChange={(id, vol) => {
+              setTracks(prev => prev.map(t => t.id === id ? { ...t, volume: vol } : t));
             }}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-              inputMode === 'mic'
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-2xs'
-                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 hover:bg-slate-300 dark:hover:bg-slate-700'
-            }`}
-            title={inputMode === 'mic' ? 'Microphone is ON (Click to turn OFF)' : 'Microphone is OFF (Click to turn ON)'}
-          >
-            {inputMode === 'mic' ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5 text-slate-400" />}
-            <span>Mic: {inputMode === 'mic' ? 'ON' : 'OFF'}</span>
-          </button>
-
-          {inputMode === 'mic' ? (
-            <div className="flex items-center gap-1.5">
-              <div className="w-20 sm:w-28 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-linear-to-r from-emerald-500 via-amber-400 to-rose-500 transition-all duration-75"
-                  style={{ width: `${Math.round(micLevel * 100)}%` }}
-                />
-              </div>
-              <span className="text-[10px] font-mono text-slate-400 w-7 text-right">
-                {Math.round(micLevel * 100)}%
-              </span>
-            </div>
-          ) : (
-            <span className="text-[10px] font-mono text-slate-400 select-none hidden sm:inline">
-              (Mic Disabled)
-            </span>
-          )}
-        </div>
-
-        {/* Right: Discreet Developer Tap / Spacebar Mode */}
-        <div className="flex items-center gap-1.5 py-0.5 px-2 bg-slate-200/60 dark:bg-slate-800/60 rounded-lg border border-slate-300/60 dark:border-slate-700/60">
-          <span className="text-[10px] font-mono font-bold text-slate-400 uppercase select-none tracking-tight">
-            dev input:
-          </span>
-
-          <button
-            onClick={() => {
-              const nextMode = inputMode === 'tap' ? 'mic' : 'tap';
-              setInputMode(nextMode);
-              if (nextMode === 'tap') {
-                acousticInputRef.current?.stop();
-                setMicLevel(0);
-              } else {
-                acousticInputRef.current?.start();
-              }
+            onTrackMuteToggle={(id) => {
+              // Ticking a part both plays it and shows its staff in the score (my own part always stays visible)
+              setTracks(prev => prev.map(t => t.id === id ? { ...t, isMuted: !t.isMuted, isVisible: t.isMuted || !!t.isUserPart } : t));
             }}
-            className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all border cursor-pointer select-none flex items-center gap-1 ${
-              inputMode === 'tap'
-                ? 'bg-slate-700 text-white border-slate-600 shadow-2xs'
-                : 'bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:bg-slate-100'
-            }`}
-            title={inputMode === 'tap' ? 'Tap input mode is ACTIVE (Click to switch back to Mic)' : 'Click to activate Spacebar / Tap input mode'}
-          >
-            <span>👆</span>
-            <span>Tap Mode{inputMode === 'tap' ? ' (Active)' : ''}</span>
-          </button>
-
-          <button
-            onClick={triggerDevTap}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold transition-all border cursor-pointer select-none flex items-center gap-1 ${
-              tapFlash
-                ? 'bg-slate-600 text-white border-slate-500 scale-95 ring-1 ring-slate-400'
-                : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-650'
-            }`}
-            title="Press Spacebar or Click to simulate tap onset"
-          >
-            <span>[Spacebar ␣]</span>
-          </button>
-
-          <button
-            onClick={triggerDevTap}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold transition-all border cursor-pointer select-none flex items-center gap-0.5 ${
-              tapFlash
-                ? 'bg-slate-600 text-white border-slate-500 scale-95 ring-1 ring-slate-400'
-                : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-650'
-            }`}
-            title="Click or Tap to simulate onset"
-          >
-            <span>👆</span>
-            <span>Tap</span>
-          </button>
+            onTrackVisibilityToggle={(id) => {
+              setTracks(prev => prev.map(t => t.id === id ? { ...t, isVisible: !t.isVisible } : t));
+            }}
+            isReferenceMidiActive={!isAudioMuted}
+            onToggleReferenceMidi={(active) => {
+              setIsAudioMuted(!active);
+              audioEngineRef.current?.setAudioBackingMuted(!active);
+            }}
+            isMinusOneActive={isMinusOneActive}
+            onToggleMinusOne={(active) => {
+              setIsMinusOneActive(active);
+            }}
+            masterVolume={masterVolume}
+            onMasterVolumeChange={(vol) => {
+              setMasterVolume(vol);
+              audioEngineRef.current?.setBackingVolumePercent(vol);
+            }}
+          />
         </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Bottom Practice Action Bar (Big iPad-Friendly Buttons) */}
-      {/* ------------------------------------------------------------------ */}
-      <footer className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0 z-20">
-        {/* Group of Practice Buttons: 'Start Practice' + side options (Metronome & Reference MIDI) */}
-        <div className="flex flex-wrap items-center gap-2.5 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700/80 shadow-2xs">
-          {/* 'Start Practice' / 'Listen Demo' Buttons */}
-          {playbackPhase !== 'idle' && !isRecordingTake ? (
-            <button
-              onClick={handleFinishPlayback}
-              className="flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs md:text-sm rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-            >
-              <Square className="w-4 h-4 fill-current" />
-              <span>{isListeningDemoRef.current ? 'Stop Demo' : 'Stop Practice'}</span>
-            </button>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={handleStartPractice}
-                disabled={playbackPhase !== 'idle' && isRecordingTake}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-black text-xs md:text-sm rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Start Practice</span>
-              </button>
-              <button
-                onClick={handleStartListenDemo}
-                disabled={playbackPhase !== 'idle'}
-                className="flex items-center gap-1.5 px-3.5 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white font-bold text-xs md:text-sm rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
-                title="Listen to the reference tempo and rhythm before practicing"
-              >
-                <span>🎧</span>
-                <span>Listen Demo</span>
-              </button>
-            </div>
-          )}
-
-          {/* Option 1: Metronome ON/OFF with Tempo Adjustment */}
-          <div className="flex items-center gap-1.5 pl-2 border-l border-slate-300 dark:border-slate-700">
-            {/* Metronome Beat Toggle */}
-            <button
-              onClick={() => {
-                const next = !isMetronomeMuted;
-                setIsMetronomeMuted(next);
-                audioEngineRef.current?.setMetronomeMuted(next);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
-                !isMetronomeMuted
-                  ? 'bg-sky-50 dark:bg-sky-950/60 border-sky-300 dark:border-sky-700 text-sky-900 dark:text-sky-200'
-                  : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400 line-through'
-              }`}
-              title="Turn metronome on or off"
-            >
-              <Clock className="w-4 h-4 text-sky-600 dark:text-sky-400" />
-              <span>Metronome: {!isMetronomeMuted ? 'ON' : 'OFF'}</span>
-            </button>
-
-            {/* Interactive Metronome Tempo Adjustment Controller */}
-            <div className="flex items-center gap-1 bg-white dark:bg-slate-800 px-2.5 py-1 rounded-xl border border-slate-200 dark:border-slate-700 shadow-2xs">
-              <button
-                onClick={() => handleBpmChange(currentBpm - 1)}
-                className="w-6 h-6 flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-black text-sm border border-slate-300 dark:border-slate-600 cursor-pointer active:scale-95"
-                title="Decrease tempo by 1 BPM"
-              >
-                -
-              </button>
-
-              <div className="flex items-center gap-0.5 px-1 font-mono font-black text-xs text-amber-700 dark:text-amber-300 justify-center">
-                <span>♩ =</span>
-                <input
-                  type="number"
-                  min="30"
-                  max="260"
-                  value={currentBpm}
-                  onChange={(e) => handleBpmChange(parseInt(e.target.value) || 120)}
-                  className="w-9 bg-transparent text-center font-mono font-black text-xs text-amber-700 dark:text-amber-300 focus:outline-hidden focus:bg-white dark:focus:bg-slate-700 rounded px-0.5 border border-transparent hover:border-slate-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <span className="text-[10px] text-slate-500 font-sans font-semibold">BPM</span>
-              </div>
-
-              <button
-                onClick={() => handleBpmChange(currentBpm + 1)}
-                className="w-6 h-6 flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-black text-sm border border-slate-300 dark:border-slate-600 cursor-pointer active:scale-95"
-                title="Increase tempo by 1 BPM"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          {/* Option 2: Reference MIDI ON/OFF Toggle */}
-          <div className="pl-2 border-l border-slate-300 dark:border-slate-700">
-            <button
-              onClick={() => {
-                const next = !isAudioMuted;
-                setIsAudioMuted(next);
-                audioEngineRef.current?.setAudioBackingMuted(next);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 cursor-pointer ${
-                !isAudioMuted
-                  ? 'bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200'
-                  : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-slate-400 line-through'
-              }`}
-              title="Turn reference MIDI playback on or off"
-            >
-              <Music className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              <span>Reference MIDI: {!isAudioMuted ? 'ON' : 'OFF'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Complete Standalone Button: Record Take (Video or Audio) */}
-        <div className="flex items-center gap-2.5">
-          {playbackPhase !== 'idle' && isRecordingTake ? (
-            <button
-              onClick={handleFinishPlayback}
-              className="flex items-center gap-2 px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-sm rounded-xl shadow-md transition-all active:scale-95 cursor-pointer animate-pulse"
-            >
-              <Square className="w-4 h-4 fill-current" />
-              <span>Stop & Save Take</span>
-            </button>
-          ) : (
-            <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800/80 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-700/80 shadow-2xs">
-              {/* Take Type Mode Selector (Video / Audio) */}
-              <div className="flex p-0.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
-                <button
-                  onClick={() => setRecordingMode('audio')}
-                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    recordingMode === 'audio'
-                      ? 'bg-amber-500 text-amber-950 shadow-xs'
-                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                  title="Audio Only Take"
-                >
-                  <Mic className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Audio</span>
-                </button>
-                <button
-                  onClick={() => setRecordingMode('video')}
-                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                    recordingMode === 'video'
-                      ? 'bg-amber-500 text-amber-950 shadow-xs'
-                      : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
-                  }`}
-                  title="Video + Audio Take"
-                >
-                  <Video className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Video</span>
-                </button>
-              </div>
-
-              {/* Standalone Record Take Button */}
-              <button
-                onClick={handleStartRecordingTake}
-                disabled={playbackPhase !== 'idle' && !isRecordingTake}
-                className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 disabled:opacity-40 text-white font-black text-sm rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-                title="Start recording a performance take"
-              >
-                <span className="w-3 h-3 rounded-full bg-white animate-pulse" />
-                <span>Record Take ({recordingMode === 'video' ? 'Video' : 'Audio'})</span>
-              </button>
-            </div>
-          )}
-        </div>
-      </footer>
+      </div>
 
       {/* ------------------------------------------------------------------ */}
       {/* Post-Take Review Modal (Watch/Listen & Submit to Teacher) */}
@@ -2170,7 +1846,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
               <button
                 onClick={handleSubmitTake}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-all active:scale-95"
+                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-md transition-all active:scale-95"
               >
                 <Send className="w-4 h-4" />
                 <span>Submit Take to Teacher</span>
@@ -2211,7 +1887,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
       {/* Resolution Toast Notification */}
       {coachResolutionToast && (
-        <div className="fixed bottom-6 right-6 bg-emerald-950 border-2 border-emerald-500 text-emerald-200 px-5 py-3 rounded-2xl shadow-2xl z-50 flex items-center gap-3 animate-in slide-in-from-bottom-5">
+        <div className="fixed bottom-6 right-6 bg-white border border-slate-200 text-slate-800 px-5 py-3 rounded-2xl shadow-2xl z-50 flex items-center gap-3 animate-in slide-in-from-bottom-5">
           <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
           <div className="text-xs">
             <span className="font-bold block text-white">Strategy Practice Mastered!</span>

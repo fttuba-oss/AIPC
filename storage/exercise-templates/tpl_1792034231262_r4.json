@@ -1,0 +1,19 @@
+{
+  "id": "tpl_1792034231262_r4",
+  "scoreId": "score_1792034229527_snur",
+  "type": "rhythm",
+  "title": "Syncopation – Bar 35",
+  "startMeasure": 35,
+  "endMeasure": 35,
+  "tempo": 100,
+  "rhythmKind": "syncopation",
+  "parts": [
+    "1st &amp; 2nd Flutes",
+    "1st Clarinet in B♭",
+    "1st Alto\nSaxophone in E♭",
+    "Glockenspiel"
+  ],
+  "notes": "Subdivide the beat in your head before each off-beat entrance. Start slowly with the click, then raise the tempo.",
+  "suggested": true,
+  "createdAt": "2026-10-15T03:17:11.261Z"
+}

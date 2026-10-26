@@ -1,0 +1,40 @@
+{
+  "id": "ex_neruda_sec2_alex",
+  "title": "Neruda Concerto - Rapid Tonguing & Rhythm (Bars 6–10)",
+  "scoreTitle": "Neruda: Concerto in E-flat (Trumpet)",
+  "scorePath": "/neruda_trumpet_concerto_excerpt.musicxml",
+  "instrumentId": "trumpet",
+  "instrumentName": "Trumpet",
+  "studentId": "stud_alex",
+  "studentName": "Alex Morgan",
+  "assignedDate": "2026-09-21T05:27:14.880Z",
+  "status": "assigned",
+  "section": {
+    "id": "sec_2",
+    "sectionNumber": 2,
+    "title": "Section 2 (Bars 6–10)",
+    "startMeasure": 6,
+    "endMeasure": 10,
+    "goals": [
+      {
+        "category": "fast_tonguing",
+        "measureRange": "Bars 6–8",
+        "startMeasure": 6,
+        "endMeasure": 8,
+        "goal": "Keep 16th-note double tonguing crisp, light, and forward-placed.",
+        "targetTempo": 96,
+        "teacherNote": "Focus on tip of tongue touch without tension in embouchure."
+      },
+      {
+        "category": "complex_rhythm",
+        "measureRange": "Bars 9–10",
+        "startMeasure": 9,
+        "endMeasure": 10,
+        "goal": "Lock into the metronome subdivision through syncopated entrances.",
+        "targetTempo": 96,
+        "teacherNote": "Subdivide eighths in your head before entering on beat 2."
+      }
+    ]
+  },
+  "teacherGeneralNotes": "Practice 15 minutes daily. First shadow finger with audio demo, then record your official take!"
+}

@@ -1,3 +1,5 @@
+import type { StoredExercise, StoredSubmission, StudentProfile } from '../types/portal';
+
 /**
  * Student Recording & Practice Session Manager
  * Organizes recordings into:
@@ -562,3 +564,120 @@ export class MediaRecordingEngine {
     return this.isRecording;
   }
 }
+
+// ----------------------------------------------------------------------------
+// Shared Storage API Client Functions
+// ----------------------------------------------------------------------------
+
+export async function fetchStudentsFromStorage(): Promise<StudentProfile[]> {
+  try {
+    const res = await fetch('/api/storage/students');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to fetch students from storage:', err);
+  }
+  return MOCK_STUDENTS;
+}
+
+export async function fetchExercisesFromStorage(studentId?: string): Promise<StoredExercise[]> {
+  try {
+    const url = studentId 
+      ? `/api/storage/exercises?studentId=${encodeURIComponent(studentId)}` 
+      : '/api/storage/exercises';
+    const res = await fetch(url);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to fetch exercises from storage:', err);
+  }
+  return [];
+}
+
+export async function saveExerciseToStorage(exercise: StoredExercise): Promise<StoredExercise | null> {
+  try {
+    const res = await fetch('/api/storage/exercises', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(exercise),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to save exercise to storage:', err);
+  }
+  return null;
+}
+
+export async function uploadRecordingTake(takeBlob: Blob, filename?: string): Promise<string | null> {
+  try {
+    const safeFilename = filename || `take_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.webm`;
+    const res = await fetch(`/api/storage/recordings?filename=${encodeURIComponent(safeFilename)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': takeBlob.type || 'audio/webm',
+        'x-filename': safeFilename,
+      },
+      body: takeBlob,
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.url;
+    }
+  } catch (err) {
+    console.error('Failed to upload recording take:', err);
+  }
+  return null;
+}
+
+export async function saveSubmissionToStorage(submission: StoredSubmission): Promise<StoredSubmission | null> {
+  try {
+    const res = await fetch('/api/storage/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submission),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to save submission to storage:', err);
+  }
+  return null;
+}
+
+export async function fetchSubmissionsFromStorage(studentId?: string, exerciseId?: string): Promise<StoredSubmission[]> {
+  try {
+    const params = new URLSearchParams();
+    if (studentId) params.set('studentId', studentId);
+    if (exerciseId) params.set('exerciseId', exerciseId);
+    const url = `/api/storage/submissions${params.toString() ? `?${params.toString()}` : ''}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to fetch submissions from storage:', err);
+  }
+  return [];
+}
+
+export async function updateSubmissionFeedbackInStorage(id: string, feedback: string): Promise<StoredSubmission | null> {
+  try {
+    const res = await fetch(`/api/storage/submissions/${encodeURIComponent(id)}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.error('Failed to update submission feedback in storage:', err);
+  }
+  return null;
+}
+

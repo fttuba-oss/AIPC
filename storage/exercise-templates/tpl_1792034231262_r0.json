@@ -1,0 +1,32 @@
+{
+  "id": "tpl_1792034231262_r0",
+  "scoreId": "score_1792034229527_snur",
+  "type": "rhythm",
+  "title": "Syncopation – Bar 9",
+  "startMeasure": 9,
+  "endMeasure": 9,
+  "tempo": 100,
+  "rhythmKind": "syncopation",
+  "parts": [
+    "Bassoon\n(Optional)",
+    "Bass Clarinet in B♭\n(Optional)",
+    "1st Alto\nSaxophone in E♭",
+    "2nd Alto\nSaxophone in E♭",
+    "Tenor\nSaxophone in B♭",
+    "Baritone\nSaxophone in E♭\n(Optional)",
+    "1st &amp; 2nd Horns in F",
+    "3rd &amp; 4th Horns in F",
+    "1st Trombone",
+    "2nd Trombone",
+    "3rd Trombone",
+    "Euphonium",
+    "Tuba",
+    "String Bass\n(Optional)",
+    "Timpani",
+    "Bass Drum",
+    "Crash Cymbals"
+  ],
+  "notes": "Subdivide the beat in your head before each off-beat entrance. Start slowly with the click, then raise the tempo.",
+  "suggested": true,
+  "createdAt": "2026-10-15T03:17:11.261Z"
+}

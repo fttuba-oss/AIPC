@@ -1,0 +1,16 @@
+{
+  "id": "tpl_1792033653143_r0",
+  "scoreId": "danxia",
+  "type": "rhythm",
+  "title": "Syncopation – Bar 27",
+  "startMeasure": 27,
+  "endMeasure": 27,
+  "tempo": 96,
+  "rhythmKind": "syncopation",
+  "parts": [
+    "Flute 1"
+  ],
+  "notes": "Subdivide the beat in your head before each off-beat entrance. Start slowly with the click, then raise the tempo.",
+  "suggested": true,
+  "createdAt": "2026-10-15T03:07:33.142Z"
+}

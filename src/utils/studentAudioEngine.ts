@@ -9,7 +9,7 @@
  */
 
 import * as Tone from 'tone';
-import { beatToSeconds, type NoteEvent, type TempoChange } from './scorePlaybackParser';
+import { beatToSeconds, secondsToBeats, type NoteEvent, type TempoChange } from './scorePlaybackParser';
 import { loadOrchestralSampler } from './orchestralSampleEngine';
 
 function loadSoundfontScript(catalog: string, instrument: string): Promise<Record<string, string>> {
@@ -45,20 +45,25 @@ function loadSoundfontScript(catalog: string, instrument: string): Promise<Recor
   });
 }
 
+import { metronomeEvents, meterAtBeat, pulseQuarterNotes, countInPulses, type MetronomeMeasure, type MetronomeSubdivision } from './metronome';
+export type { MetronomeSubdivision } from './metronome';
+
 export interface SectionPlaybackConfig {
   intendedBpm?: number;
   bpm?: number;
   timeSignature: [number, number]; // [numerator, denominator]
   startMeasure: number;
   endMeasure: number;
-  countInBeats?: number;
+  countInBeats?: number; // Counted pulses; omitted means one bar in the active metre.
   instrumentName?: string;
   notes?: NoteEvent[];
   startBeat?: number;
   totalBeats?: number;
   startFromBeat?: number;
   ladderLevel?: number;
+  subdivision?: MetronomeSubdivision;
   tempos?: TempoChange[];
+  metronomeMeasures?: MetronomeMeasure[];
 }
 
 export class StudentAudioEngine {
@@ -74,8 +79,13 @@ export class StudentAudioEngine {
   private isMetronomeMuted: boolean = false;
   private isPlaying: boolean = false;
 
-  private scheduledEventIds: number[] = [];
-  private countInTimer: any = null;
+  private playbackGeneration = 0;
+  private countInActive = false;
+  private transportOriginRealSeconds = 0;
+  private musicStartTransportSeconds = 0;
+  private countInPulseDuration = 0;
+  private countInTotal = 0;
+  private countInShown = 0;
   private progressInterval: any = null;
 
   private onTickCallback: ((beatNumber: number, isCountIn: boolean) => void) | null = null;
@@ -89,6 +99,7 @@ export class StudentAudioEngine {
 
   private sectionDurationSeconds: number = 0;
   private sectionStartTimeSeconds: number = 0;
+  private transportOriginScoreSeconds: number = 0;
   private soundfontLoadedInstrument: string | null = null;
 
   constructor() {
@@ -102,6 +113,7 @@ export class StudentAudioEngine {
     this.metronomeVolume = new Tone.Volume(-2).toDestination();
     this.backingVolume.mute = this.isAudioBackingMuted;
     this.metronomeVolume.mute = this.isMetronomeMuted;
+    this.setBackingVolumePercent(this.backingVolumePercent);
 
     // Concert Hall Reverb space (adds authentic acoustic room presence and natural air)
     this.hallReverb = new Tone.Freeverb({
@@ -112,12 +124,12 @@ export class StudentAudioEngine {
 
     // High quality expressive synth fallback
     this.synth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sawtooth6' },
+      oscillator: { type: 'triangle' },
       envelope: {
-        attack: 0.03,
+        attack: 0.02,
         decay: 0.1,
-        sustain: 0.75,
-        release: 0.15,
+        sustain: 0.7,
+        release: 0.1,
       },
     }).connect(this.hallReverb);
 
@@ -173,6 +185,64 @@ export class StudentAudioEngine {
     }
   }
 
+  private partMix: Map<string, number> = new Map();
+
+  /** Live per-part gain (0 = silent). Read at trigger time, so it applies during playback too. */
+  setPartMix(mix: Record<string, number>) {
+    this.partMix = new Map(Object.entries(mix));
+  }
+
+  private samplerByInstrument: Map<string, Tone.Sampler> = new Map();
+
+  /** Loads (once) a sampler for each instrument id so every part can sound like its own instrument. */
+  async preloadInstruments(instruments: string[]) {
+    this.ensureInitialized();
+    const outputBus = this.hallReverb || this.backingVolume!;
+    const unique = Array.from(new Set(instruments.filter(Boolean)));
+    await Promise.all(unique.map(async (inst) => {
+      if (this.samplerByInstrument.has(inst)) return;
+      try {
+        const s = await loadOrchestralSampler(inst, outputBus);
+        if (s) { this.samplerByInstrument.set(inst, s); return; }
+      } catch { /* try legacy soundfont below */ }
+      try {
+        const data = await loadSoundfontScript('MusyngKite', inst);
+        const s = await new Promise<Tone.Sampler>((resolve) => {
+          const smp = new Tone.Sampler({ urls: data, onload: () => resolve(smp) }).connect(outputBus);
+        });
+        this.samplerByInstrument.set(inst, s);
+      } catch (e) {
+        console.warn('[StudentAudioEngine] No sampler for ' + inst + ', using default voice', e);
+      }
+    }));
+  }
+
+  private triggerNote(note: NoteEvent, noteName: string, duration: number, time: number, baseVelocity: number) {
+    const gain = note.partId !== undefined && this.partMix.has(note.partId) ? this.partMix.get(note.partId)! : 1;
+    if (gain <= 0) return;
+    const velocity = Math.max(0.05, Math.min(1, baseVelocity * gain));
+    const instrument = note.instrument;
+    const own = instrument ? this.samplerByInstrument.get(instrument) : undefined;
+    if (own && own.loaded) {
+      own.triggerAttackRelease(noteName, duration, time, velocity);
+    } else if (this.sampler && this.sampler.loaded) {
+      this.sampler.triggerAttackRelease(noteName, duration, time, velocity);
+    } else if (this.synth) {
+      this.synth.triggerAttackRelease(noteName, duration, time, velocity);
+    }
+  }
+  private backingVolumePercent: number = 75;
+
+  /** Reference MIDI master volume, 0-100 (75 = unity gain). */
+  setBackingVolumePercent(percent: number) {
+    this.backingVolumePercent = Math.max(0, Math.min(100, percent));
+    if (this.backingVolume) {
+      this.backingVolume.volume.value = this.backingVolumePercent <= 0
+        ? -60
+        : Math.max(-60, 20 * Math.log10(this.backingVolumePercent / 75));
+    }
+  }
+
   setAudioBackingMuted(muted: boolean) {
     this.isAudioBackingMuted = muted;
     if (this.backingVolume) {
@@ -180,413 +250,256 @@ export class StudentAudioEngine {
     }
   }
 
+  private activeSubdivision: MetronomeSubdivision = 'quarter';
+
+  setSubdivision(sub: MetronomeSubdivision) {
+    if (sub === this.activeSubdivision) return;
+    this.activeSubdivision = sub;
+    if (this.activeConfig) this.activeConfig.subdivision = sub;
+    if (this.isPlaying && !this.countInActive) this.rebuildFromCurrentPosition();
+  }
+
+  getSubdivision(): MetronomeSubdivision { return this.activeSubdivision; }
+
   setMetronomeMuted(muted: boolean) {
     this.isMetronomeMuted = muted;
-    if (this.metronomeVolume) {
-      this.metronomeVolume.mute = muted;
-    }
+    if (this.metronomeVolume) this.metronomeVolume.mute = muted;
   }
 
-  /**
-   * Dynamically adjust the playback BPM.
-   * Rescales playback so MIDI notes, metronome clicks, and tracker cursor adjust in real-time.
-   */
   setBpm(newBpm: number) {
-    const clamped = Math.max(30, Math.min(300, Math.round(newBpm)));
-    if (clamped === this.currentBpm) return;
-
-    if (this.isPlaying && this.activeConfig && Tone.Transport.state === 'started') {
-      const beatsPerMeasure = this.activeConfig.timeSignature[0] || 4;
-      const sectionStartBeat = this.activeConfig.startBeat ?? ((this.activeConfig.startMeasure - 1) * beatsPerMeasure);
-      const totalMeasures = (this.activeConfig.endMeasure - this.activeConfig.startMeasure) + 1;
-      const totalBeats = this.activeConfig.totalBeats ?? (totalMeasures * beatsPerMeasure);
-
-      const elapsedRealSeconds = Tone.Transport.seconds;
-      const currentRelativeBeat = elapsedRealSeconds * (this.currentBpm / 60);
-
-      this.currentBpm = clamped;
-      this.speedMultiplier = clamped / this.intendedBpm;
-
-      if (currentRelativeBeat >= totalBeats) {
-        this.finishPlayback();
-        return;
-      }
-
-      this.rescheduleRemaining(sectionStartBeat, currentRelativeBeat, beatsPerMeasure, totalBeats);
-    } else {
-      this.currentBpm = clamped;
-      this.speedMultiplier = clamped / this.intendedBpm;
+    const clamped = Math.max(30, Math.min(300, Math.round(newBpm * 1000) / 1000));
+    if (clamped === this.getCurrentBpm()) return;
+    // Capture score position using the OLD speed before changing it.
+    const position = this.getScorePlaybackSeconds();
+    const remainingCountPulses = this.countInActive
+      ? Math.max(0, (this.musicStartTransportSeconds - this.transportSeconds()) / this.countInPulseDuration) : 0;
+    const baseline = position !== null ? this.tempoAtBeat(this.scoreBeat(position)) : this.intendedBpm;
+    this.currentBpm = clamped;
+    this.speedMultiplier = clamped / baseline;
+    if (!this.isPlaying || !this.activeConfig) return;
+    if (this.countInActive) {
+      // Recount the remaining audible pulses at the new tempo, on the audio clock.
+      const remaining = Math.max(0, this.countInTotal - this.countInShown);
+      this.schedulePlayback(this.transportOriginScoreSeconds, remaining, this.countInShown,
+        Math.max(0, remainingCountPulses - remaining));
+    } else if (position !== null) {
+      this.scheduleRemaining(position);
     }
   }
 
-  setSpeedMultiplier(multiplier: number) {
-    this.speedMultiplier = multiplier;
-    this.setBpm(Math.round(this.intendedBpm * multiplier));
-  }
-
-  getIntendedBpm(): number {
-    return this.intendedBpm;
-  }
-
+  setSpeedMultiplier(multiplier: number) { this.setBpm(this.intendedBpm * multiplier); }
+  getIntendedBpm(): number { return this.intendedBpm; }
   getCurrentBpm(): number {
-    return this.currentBpm;
+    if (!this.isPlaying || this.countInActive) return this.currentBpm;
+    const seconds = this.getScorePlaybackSeconds();
+    return seconds === null ? this.currentBpm : Math.round(this.tempoAtBeat(this.scoreBeat(seconds)) * this.speedMultiplier * 1000) / 1000;
   }
+  getSpeedMultiplier(): number { return this.speedMultiplier; }
+  setOnTick(cb: (beatNumber: number, isCountIn: boolean) => void) { this.onTickCallback = cb; }
+  setOnTimeUpdate(cb: (timeSec: number, totalSec: number, elapsedRealSec?: number) => void) { this.onTimeUpdateCallback = cb; }
+  setOnEnd(cb: () => void) { this.onEndCallback = cb; }
 
-  getSpeedMultiplier(): number {
-    return this.speedMultiplier;
+  private transportSeconds(): number {
+    // Tone's scheduling clock includes look-ahead. Visuals use the audible clock instead.
+    return Math.max(0, Tone.Transport.getSecondsAtTime(Tone.immediate()));
   }
-
-  setOnTick(cb: (beatNumber: number, isCountIn: boolean) => void) {
-    this.onTickCallback = cb;
-  }
-
-  setOnTimeUpdate(cb: (timeSec: number, totalSec: number, elapsedRealSec?: number) => void) {
-    this.onTimeUpdateCallback = cb;
-  }
-
   getElapsedPlaybackSeconds(): number {
-    if (!this.isPlaying || Tone.Transport.state !== 'started') return 0;
-    return Math.max(0, Tone.Transport.seconds);
+    return this.isPlaying ? Math.max(0, this.transportSeconds() - this.musicStartTransportSeconds) : 0;
+  }
+  getScorePlaybackSeconds(): number | null {
+    if (!this.isPlaying || this.countInActive) return null;
+    return this.transportOriginScoreSeconds
+      + Math.max(0, this.transportSeconds() - this.transportOriginRealSeconds) * this.speedMultiplier;
+  }
+  private scoreSeconds(beat: number): number {
+    return this.activeConfig?.tempos?.length
+      ? beatToSeconds(beat, this.activeConfig.tempos) : beat * 60 / this.intendedBpm;
+  }
+  private scoreBeat(seconds: number): number {
+    return this.activeConfig?.tempos?.length
+      ? secondsToBeats(seconds, this.activeConfig.tempos) : seconds * this.intendedBpm / 60;
+  }
+  private tempoAtBeat(beat: number): number {
+    let bpm = this.intendedBpm;
+    for (const t of this.activeConfig?.tempos || []) { if (t.beat > beat) break; bpm = t.bpm; }
+    return bpm;
+  }
+  private sectionBounds() {
+    const config = this.activeConfig!;
+    const barLength = config.timeSignature[0] * 4 / config.timeSignature[1];
+    const start = config.startBeat ?? (config.startMeasure - 1) * barLength;
+    const end = start + (config.totalBeats ?? (config.endMeasure - config.startMeasure + 1) * barLength);
+    return { start, end };
+  }
+  private measures(): MetronomeMeasure[] {
+    const config = this.activeConfig!;
+    if (config.metronomeMeasures?.length) return config.metronomeMeasures;
+    const { start, end } = this.sectionBounds();
+    const [numerator, denominator] = config.timeSignature;
+    const length = numerator * 4 / denominator;
+    const result: MetronomeMeasure[] = [];
+    for (let beat = start, n = config.startMeasure; beat < end - 1e-7; beat += length, n++) {
+      result.push({ startBeat: beat, endBeat: Math.min(end, beat + length), measureNumber: n, numerator, denominator });
+    }
+    return result;
   }
 
-  setOnEnd(cb: () => void) {
-    this.onEndCallback = cb;
-  }
-
-  /**
-   * Starts playback of a section with count-in and synchronized notes
-   */
   async startSectionPlayback(config: SectionPlaybackConfig, requestedBpm?: number) {
-    await Tone.start();
-    this.ensureInitialized();
     this.stop();
-
+    const generation = this.playbackGeneration;
+    await Tone.start();
+    if (generation !== this.playbackGeneration) return;
+    this.ensureInitialized();
+    await this.preloadInstruments((config.notes || []).map(n => n.instrument ?? ''));
+    if (generation !== this.playbackGeneration) return;
     this.activeConfig = config;
     this.intendedBpm = config.intendedBpm ?? config.bpm ?? 120;
-    this.currentBpm = requestedBpm ?? config.bpm ?? this.intendedBpm;
-    this.speedMultiplier = this.currentBpm / this.intendedBpm;
-
-    const beatsPerMeasure = config.timeSignature[0] || 4;
-    const countInBeats = config.countInBeats ?? 4;
-    const secondsPerBeatAtCurrentBpm = 60 / this.currentBpm;
-
-    const sectionStartBeat = config.startBeat ?? ((config.startMeasure - 1) * beatsPerMeasure);
-    const totalMeasures = (config.endMeasure - config.startMeasure) + 1;
-    const totalBeats = config.totalBeats ?? (totalMeasures * beatsPerMeasure);
-
-    // Section duration in baseline score seconds
-    this.sectionDurationSeconds = totalBeats * (60 / this.intendedBpm);
-    this.sectionStartTimeSeconds = sectionStartBeat * (60 / this.intendedBpm);
-
-    // Filter notes for the section
-    const sectionNotes = (config.notes || []).filter(
-      n => n.measureNumber >= config.startMeasure && n.measureNumber <= config.endMeasure
-    );
-
-    let currentCountIn = 1;
-
-    // 1. Audible & Visual Count-In at currentBpm
-    const runCountIn = () => {
-      if (currentCountIn <= countInBeats) {
-        const clickPitch = currentCountIn === 1 ? 'C6' : 'G5';
-        if (!this.isMetronomeMuted && this.metronomeSynth) {
-          this.metronomeSynth.triggerAttackRelease(clickPitch, '32n');
-        }
-        if (this.onTickCallback) {
-          this.onTickCallback(currentCountIn, true);
-        }
-
-        const countInProgress = -(countInBeats - currentCountIn + 1) * (60 / this.intendedBpm);
-        if (this.onTimeUpdateCallback) {
-          this.onTimeUpdateCallback(countInProgress, this.sectionDurationSeconds);
-        }
-
-        currentCountIn++;
-        this.countInTimer = setTimeout(runCountIn, secondsPerBeatAtCurrentBpm * 1000);
-      } else {
-        // 2. Start Transport Music & Metronome in perfect sync
-        const startFromRelativeBeat = config.startFromBeat !== undefined
-          ? Math.max(0, Math.min(totalBeats - 0.1, config.startFromBeat - sectionStartBeat))
-          : 0;
-        this.startTransportMusic(
-          sectionNotes,
-          sectionStartBeat,
-          beatsPerMeasure,
-          totalBeats,
-          startFromRelativeBeat
-        );
-      }
-    };
-
+    const originBeat = config.startFromBeat ?? config.startBeat ?? 0;
+    // The BPM control sets the tempo at the selected start, even after a score tempo change.
+    const originTempo = this.tempoAtBeat(originBeat);
+    this.currentBpm = requestedBpm ?? config.bpm ?? originTempo;
+    this.speedMultiplier = this.currentBpm / originTempo;
+    this.intendedBpm = originTempo;
+    if (config.subdivision) this.activeSubdivision = config.subdivision;
+    const { start, end } = this.sectionBounds();
+    const beat = Math.max(start, Math.min(end - 1e-7, config.startFromBeat ?? start));
+    this.sectionStartTimeSeconds = this.scoreSeconds(start);
+    this.sectionDurationSeconds = this.scoreSeconds(end) - this.sectionStartTimeSeconds;
+    const meter = meterAtBeat(this.measures(), beat, { numerator: config.timeSignature[0], denominator: config.timeSignature[1] });
     this.isPlaying = true;
-    runCountIn();
+    this.schedulePlayback(this.scoreSeconds(beat), config.countInBeats ?? countInPulses(meter.numerator, meter.denominator));
   }
 
-    private shouldPlayMetronomeClick(b: number, beatInBar: number, beatsPerMeasure: number, ladderLevel: number): boolean {
-    if (ladderLevel === 0) return false; // Level 0: Silent transfer test
-    const barIndex = Math.floor(b / beatsPerMeasure);
-    if (ladderLevel === 1) return (beatInBar === 0 || beatInBar === 2) && (barIndex % 2 === 0);
-    if (ladderLevel === 2) return beatInBar === 0; // Downbeat only
-    if (ladderLevel === 3) return (barIndex % 4 < 2); // Gap click: 2 bars on, 2 bars off
-    return true; // Level 4 and 5
-  }
-
-  private startTransportMusic(
-    sectionNotes: NoteEvent[],
-    sectionStartBeat: number,
-    beatsPerMeasure: number,
-    totalBeats: number,
-    startFromRelativeBeat: number = 0
-  ) {
+  /** Count-in and music share one transport; no browser timers determine audible beats. */
+  private schedulePlayback(originScoreSeconds: number, count: number, shownOffset = 0, firstDelayPulses = 0) {
+    Tone.Transport.stop();
     Tone.Transport.cancel();
     Tone.Transport.position = 0;
-    this.scheduledEventIds = [];
-
-    // Tone.Transport runs at real seconds baseline (bpm = 60)
     Tone.Transport.bpm.value = 60;
-
-    const getBeatTime = (beat: number): number => {
-      if (this.activeConfig?.tempos && this.activeConfig.tempos.length > 0) {
-        const trueTime = beatToSeconds(beat, this.activeConfig.tempos);
-        const startTime = beatToSeconds(sectionStartBeat + startFromRelativeBeat, this.activeConfig.tempos);
-        return Math.max(0, (trueTime - startTime) / this.speedMultiplier);
-      }
-      return (beat - (sectionStartBeat + startFromRelativeBeat)) * (60 / this.currentBpm);
-    };
-
-    const totalRealDuration = getBeatTime(sectionStartBeat + totalBeats);
-
-    // 1. Schedule Metronome clicks on Transport according to ladderLevel
-    const ladderLevel = this.activeConfig?.ladderLevel ?? 4;
-    for (let b = 0; b < totalBeats; b++) {
-      if (b >= startFromRelativeBeat) {
-        const beatInBar = b % beatsPerMeasure;
-        const isDownbeat = beatInBar === 0;
-        const clickPitch = isDownbeat ? 'C6' : 'G5';
-        const eventTime = getBeatTime(sectionStartBeat + b);
-        const nextBeatTime = getBeatTime(sectionStartBeat + b + 1);
-        const beatDuration = Math.max(0.2, nextBeatTime - eventTime);
-        const shouldClick = this.shouldPlayMetronomeClick(b, beatInBar, beatsPerMeasure, ladderLevel);
-
-        const eventId = Tone.Transport.schedule((time) => {
-          if (!this.isMetronomeMuted && this.metronomeSynth && shouldClick) {
-            this.metronomeSynth.triggerAttackRelease(clickPitch, '32n', time);
-          }
-          Tone.Draw.schedule(() => {
-            if (this.onTickCallback) {
-              this.onTickCallback(beatInBar + 1, false);
-            }
-          }, time);
-        }, eventTime);
-
-        this.scheduledEventIds.push(eventId);
-
-        // Level 5 Subdivisions (16th-note ticks)
-        if (ladderLevel === 5 && !this.isMetronomeMuted && this.metronomeSynth) {
-          for (let sub = 1; sub <= 3; sub++) {
-            const subTime = eventTime + (sub * (beatDuration / 4));
-            const subPitch = sub === 2 ? 'G4' : 'E4';
-            const subId = Tone.Transport.schedule((time) => {
-              if (!this.isMetronomeMuted && this.metronomeSynth) {
-                this.metronomeSynth.triggerAttackRelease(subPitch, '64n', time, 0.45);
-              }
-            }, subTime);
-            this.scheduledEventIds.push(subId);
-          }
-        }
-      }
+    if (this.progressInterval) clearInterval(this.progressInterval);
+    const generation = ++this.playbackGeneration;
+    this.countInTotal = shownOffset + count;
+    this.countInShown = shownOffset;
+    this.countInActive = count > 0 || firstDelayPulses > 0;
+    this.transportOriginScoreSeconds = originScoreSeconds;
+    const config = this.activeConfig!;
+    const meter = meterAtBeat(this.measures(), this.scoreBeat(originScoreSeconds), { numerator: config.timeSignature[0], denominator: config.timeSignature[1] });
+    this.countInPulseDuration = pulseQuarterNotes(meter.numerator, meter.denominator) * 60 / this.currentBpm;
+    this.musicStartTransportSeconds = (count + firstDelayPulses) * this.countInPulseDuration;
+    this.transportOriginRealSeconds = this.musicStartTransportSeconds;
+    for (let i = 0; i < count; i++) {
+      Tone.Transport.schedule((time) => {
+        if (generation !== this.playbackGeneration) return;
+        if (!this.isMetronomeMuted) this.metronomeSynth?.triggerAttackRelease(shownOffset + i === 0 ? 'C6' : 'G5', 0.035, time);
+        Tone.Draw.schedule(() => {
+          if (generation !== this.playbackGeneration) return;
+          this.countInShown = shownOffset + i + 1;
+          this.onTickCallback?.(shownOffset + i + 1, true);
+        }, time);
+      }, (i + firstDelayPulses) * this.countInPulseDuration);
     }
-
-    // 2. Schedule Melodic MIDI Notes on Transport
-    sectionNotes.forEach((note) => {
-      const relativeBeats = note.beat - sectionStartBeat;
-      if (relativeBeats >= startFromRelativeBeat && relativeBeats < totalBeats) {
-        const eventTime = getBeatTime(note.beat);
-        const nextEventTime = getBeatTime(note.beat + note.durationBeats);
-        const playDuration = Math.max(0.04, (nextEventTime - eventTime) - 0.015);
-        const noteName = Tone.Frequency(note.pitch, 'midi').toNote();
-        const velocity = note.velocity ?? 0.8;
-
-        const eventId = Tone.Transport.schedule((time) => {
-          if (!this.isAudioBackingMuted) {
-            if (this.sampler && this.sampler.loaded) {
-              this.sampler.triggerAttackRelease(noteName, playDuration, time, velocity);
-            } else if (this.synth) {
-              this.synth.triggerAttackRelease(noteName, playDuration, time, velocity);
-            }
-          }
-        }, eventTime);
-        this.scheduledEventIds.push(eventId);
-      }
-    });
-
-    // 3. High-resolution time update loop reading Transport.seconds
-    this.progressInterval = setInterval(() => {
-      if (!this.isPlaying) return;
-      const elapsedRealSeconds = Tone.Transport.seconds;
-      
-      // Calculate current score beat from elapsed time
-      let currentScoreBeat = sectionStartBeat + startFromRelativeBeat;
-      if (this.activeConfig?.tempos && this.activeConfig.tempos.length > 0) {
-        const startSec = beatToSeconds(sectionStartBeat + startFromRelativeBeat, this.activeConfig.tempos);
-        const targetSec = startSec + (elapsedRealSeconds * this.speedMultiplier);
-        // Find beat for targetSec
-        let activeT = this.activeConfig.tempos[0];
-        for (const t of this.activeConfig.tempos) {
-          if (t.timeInSeconds <= targetSec) activeT = t;
-          else break;
-        }
-        currentScoreBeat = activeT.beat + ((targetSec - activeT.timeInSeconds) / 60) * activeT.bpm;
-      } else {
-        currentScoreBeat += elapsedRealSeconds * (this.currentBpm / 60);
-      }
-
-      // Convert current beat into score baseline seconds so OSMD cursor aligns with scoreData.tempos
-      const scoreCurrentTime = this.activeConfig?.tempos
-        ? beatToSeconds(currentScoreBeat, this.activeConfig.tempos)
-        : (currentScoreBeat / this.intendedBpm) * 60;
-
-      if (this.onTimeUpdateCallback) {
-        this.onTimeUpdateCallback(scoreCurrentTime, this.sectionDurationSeconds, elapsedRealSeconds);
-      }
-
-      if (elapsedRealSeconds >= totalRealDuration) {
-        this.finishPlayback();
-      }
-    }, 20);
-
-    Tone.Transport.start('+0.05');
+    Tone.Transport.schedule((time) => Tone.Draw.schedule(() => {
+      if (generation !== this.playbackGeneration) return;
+      this.countInActive = false;
+      this.onTickCallback?.(1, false);
+    }, time), this.musicStartTransportSeconds);
+    this.scheduleEvents(this.scoreBeat(originScoreSeconds), this.musicStartTransportSeconds, generation);
+    this.startProgressUpdates();
+    Tone.Transport.start();
   }
 
-  private rescheduleRemaining(
-    sectionStartBeat: number,
-    startFromRelativeBeat: number,
-    beatsPerMeasure: number,
-    totalBeats: number
-  ) {
-    Tone.Transport.cancel();
-    Tone.Transport.position = 0;
-    this.scheduledEventIds = [];
+  private rebuildFromCurrentPosition() {
+    const position = this.getScorePlaybackSeconds();
+    if (position !== null) this.scheduleRemaining(position);
+  }
+  private scheduleRemaining(scoreSeconds: number) {
+    const beat = this.scoreBeat(scoreSeconds);
+    if (beat >= this.sectionBounds().end - 1e-7) { this.finishPlayback(); return; }
+    // Keep the transport running. Only replace future events, at the current score position.
+    const now = this.transportSeconds();
+    Tone.Transport.cancel(now);
+    const generation = ++this.playbackGeneration;
+    this.transportOriginScoreSeconds = scoreSeconds;
+    this.transportOriginRealSeconds = now;
+    this.scheduleEvents(beat, now, generation);
+    this.onTimeUpdateCallback?.(scoreSeconds, this.sectionDurationSeconds, this.getElapsedPlaybackSeconds());
+  }
 
-    const secondsPerBeat = 60 / this.currentBpm;
-    const remainingBeats = totalBeats - startFromRelativeBeat;
-    const totalRemainingRealSeconds = remainingBeats * secondsPerBeat;
-
-    const sectionNotes = (this.activeConfig?.notes || []).filter(
-      n => n.measureNumber >= (this.activeConfig?.startMeasure ?? 1) &&
-           n.measureNumber <= (this.activeConfig?.endMeasure ?? 1)
-    );
-
-    // 1. Reschedule Metronome clicks
-    for (let b = 0; b < totalBeats; b++) {
-      if (b >= startFromRelativeBeat) {
-        const beatInBar = b % beatsPerMeasure;
-        const isDownbeat = beatInBar === 0;
-        const clickPitch = isDownbeat ? 'C6' : 'G5';
-        const eventTime = (b - startFromRelativeBeat) * secondsPerBeat;
-
-        const eventId = Tone.Transport.schedule((time) => {
-          if (!this.isMetronomeMuted && this.metronomeSynth) {
-            this.metronomeSynth.triggerAttackRelease(clickPitch, '32n', time);
-          }
-          Tone.Draw.schedule(() => {
-            if (this.onTickCallback) {
-              this.onTickCallback(beatInBar + 1, false);
-            }
-          }, time);
-        }, eventTime);
-
-        this.scheduledEventIds.push(eventId);
-      }
+  private scheduleEvents(fromBeat: number, fromRealSeconds: number, generation: number) {
+    const config = this.activeConfig!;
+    const endBeat = this.sectionBounds().end;
+    const startSeconds = this.scoreSeconds(fromBeat);
+    const at = (beat: number) => fromRealSeconds + (this.scoreSeconds(beat) - startSeconds) / this.speedMultiplier;
+    const clicks = metronomeEvents(this.measures(), fromBeat, endBeat, this.activeSubdivision, config.ladderLevel);
+    for (const click of clicks) {
+      Tone.Transport.schedule((time) => {
+        if (generation !== this.playbackGeneration) return;
+        if (!this.isMetronomeMuted) {
+          const pitch = click.subdivision ? (click.subdivision === 2 ? 'G4' : 'E4') : click.downbeat ? 'C6' : 'G5';
+          this.metronomeSynth?.triggerAttackRelease(pitch, 0.035, time, click.subdivision ? 0.4 : 0.8);
+        }
+        if (!click.subdivision) Tone.Draw.schedule(() => {
+          if (generation === this.playbackGeneration) this.onTickCallback?.(click.beatNumber, false);
+        }, time);
+      }, at(click.beat));
     }
-
-    // 2. Reschedule Notes
-    sectionNotes.forEach((note) => {
-      const relativeBeats = note.beat - sectionStartBeat;
-      if (relativeBeats >= startFromRelativeBeat && relativeBeats < totalBeats) {
-        const eventTime = (relativeBeats - startFromRelativeBeat) * secondsPerBeat;
-        const playDuration = Math.max(0.04, (note.durationBeats * secondsPerBeat) - 0.015);
-        const noteName = Tone.Frequency(note.pitch, 'midi').toNote();
-        const velocity = note.velocity ?? 0.8;
-
-        const eventId = Tone.Transport.schedule((time) => {
-          if (!this.isAudioBackingMuted) {
-            if (this.sampler && this.sampler.loaded) {
-              this.sampler.triggerAttackRelease(noteName, playDuration, time, velocity);
-            } else if (this.synth) {
-              this.synth.triggerAttackRelease(noteName, playDuration, time, velocity);
-            }
-          }
-        }, eventTime);
-        this.scheduledEventIds.push(eventId);
-      }
-    });
-
-    if (this.progressInterval) {
-      clearInterval(this.progressInterval);
+    for (const note of config.notes || []) {
+      if (note.measureNumber < config.startMeasure || note.measureNumber > config.endMeasure || note.beat < fromBeat - 1e-7 || note.beat >= endBeat) continue;
+      const duration = Math.max(0.04, (this.scoreSeconds(note.beat + note.durationBeats) - this.scoreSeconds(note.beat)) / this.speedMultiplier - 0.015);
+      Tone.Transport.schedule((time) => {
+        if (generation !== this.playbackGeneration || this.isAudioBackingMuted) return;
+        this.triggerNote(note, Tone.Frequency(note.pitch, 'midi').toNote(), duration, time, note.velocity ?? 0.8);
+      }, at(note.beat));
     }
+    Tone.Transport.schedule((time) => Tone.Draw.schedule(() => {
+      if (generation === this.playbackGeneration) this.finishPlayback();
+    }, time), at(endBeat));
+  }
 
+  private startProgressUpdates() {
     this.progressInterval = setInterval(() => {
       if (!this.isPlaying) return;
-      const elapsedRealSeconds = Tone.Transport.seconds;
-      const elapsedBeatsSinceReschedule = elapsedRealSeconds * (this.currentBpm / 60);
-      const currentScoreBeat = sectionStartBeat + startFromRelativeBeat + elapsedBeatsSinceReschedule;
-
-      const scoreCurrentTime = this.activeConfig?.tempos
-        ? beatToSeconds(currentScoreBeat, this.activeConfig.tempos)
-        : (currentScoreBeat / this.intendedBpm) * 60;
-
-      if (this.onTimeUpdateCallback) {
-        this.onTimeUpdateCallback(scoreCurrentTime, this.sectionDurationSeconds);
+      const elapsed = this.transportSeconds();
+      if (this.countInActive && elapsed < this.musicStartTransportSeconds) {
+        this.onTimeUpdateCallback?.(-(this.musicStartTransportSeconds - elapsed) * this.speedMultiplier, this.sectionDurationSeconds);
+        return;
       }
-
-      if (elapsedRealSeconds >= totalRemainingRealSeconds) {
-        this.finishPlayback();
-      }
-    }, 20);
-
-    Tone.Transport.start();
+      this.countInActive = false;
+      const seconds = this.getScorePlaybackSeconds();
+      if (seconds !== null) this.onTimeUpdateCallback?.(seconds, this.sectionDurationSeconds, this.getElapsedPlaybackSeconds());
+    }, 35);
   }
 
   private finishPlayback() {
     this.stop();
-    if (this.onEndCallback) {
-      this.onEndCallback();
-    }
+    this.onEndCallback?.();
   }
 
-  seekToScoreBeat(targetScoreBeat: number) {
+  seekToScoreBeat(targetScoreBeat: number, targetBpm?: number) {
     if (!this.activeConfig) return;
-    const beatsPerMeasure = this.activeConfig.timeSignature[0] || 4;
-    const sectionStartBeat = this.activeConfig.startBeat ?? ((this.activeConfig.startMeasure - 1) * beatsPerMeasure);
-    const totalMeasures = (this.activeConfig.endMeasure - this.activeConfig.startMeasure) + 1;
-    const totalBeats = this.activeConfig.totalBeats ?? (totalMeasures * beatsPerMeasure);
-    const relativeBeat = Math.max(0, Math.min(totalBeats - 0.1, targetScoreBeat - sectionStartBeat));
-
-    if (this.isPlaying && Tone.Transport.state === 'started') {
-      this.rescheduleRemaining(sectionStartBeat, relativeBeat, beatsPerMeasure, totalBeats);
+    const { start, end } = this.sectionBounds();
+    const beat = Math.max(start, Math.min(end - 1e-7, targetScoreBeat));
+    if (targetBpm !== undefined) {
+      const tempo = this.tempoAtBeat(beat);
+      this.intendedBpm = tempo;
+      this.currentBpm = Math.max(30, Math.min(300, targetBpm));
+      this.speedMultiplier = this.currentBpm / tempo;
+    }
+    if (this.isPlaying) {
+      const seconds = this.scoreSeconds(beat);
+      if (this.countInActive) this.schedulePlayback(seconds, this.countInTotal);
+      else this.scheduleRemaining(seconds);
     }
   }
 
   stop() {
-    if (this.countInTimer) {
-      clearTimeout(this.countInTimer);
-      this.countInTimer = null;
-    }
-    if (this.progressInterval) {
-      clearInterval(this.progressInterval);
-      this.progressInterval = null;
-    }
-    if (Tone.Transport.state === 'started') {
-      Tone.Transport.stop();
-      Tone.Transport.cancel();
-    }
+    ++this.playbackGeneration;
+    if (this.progressInterval) { clearInterval(this.progressInterval); this.progressInterval = null; }
+    if (this.isPlaying) { Tone.Transport.stop(); Tone.Transport.cancel(); }
     this.isPlaying = false;
+    this.countInActive = false;
   }
-
-  getIsPlaying(): boolean {
-    return this.isPlaying;
-  }
+  getIsPlaying(): boolean { return this.isPlaying; }
 
   getSectionStartTime(): number {
     return this.sectionStartTimeSeconds;

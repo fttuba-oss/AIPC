@@ -1,0 +1,30 @@
+{
+  "id": "batch_1790005445950",
+  "title": "Beautiful Danxia - Bars 47–48 (Syncopation builder)",
+  "scoreTitle": "Beautiful Danxia",
+  "scorePath": "/sailing_with_whales_trumpet1.musicxml",
+  "instrumentId": "band_ensemble",
+  "instrumentName": "Flutes & Clarinets",
+  "studentId": "stud_alex",
+  "studentName": "Alex Morgan",
+  "assignedDate": "2026-09-21T15:44:05.950Z",
+  "status": "assigned",
+  "section": {
+    "sectionNumber": 1,
+    "title": "Rehearsal Passage (Bars 47–48)",
+    "startMeasure": 47,
+    "endMeasure": 48,
+    "goals": [
+      {
+        "category": "complex_rhythm",
+        "measureRange": "Bars 47–48",
+        "startMeasure": 47,
+        "endMeasure": 48,
+        "goal": "Keep the off-beat quavers steady against the pulse.",
+        "targetTempo": 96,
+        "teacherNote": "Start slowly. Increase tempo after three accurate repetitions."
+      }
+    ]
+  },
+  "teacherGeneralNotes": "Start slowly. Increase tempo after three accurate repetitions."
+}
