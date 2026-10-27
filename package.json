@@ -8,9 +8,16 @@
     "dev:teacher": "vite --port 5174",
     "dev:student": "vite --port 5175",
     "build": "tsc -b && vite build",
-    "test": "npx tsx --test tests/**/*.test.ts tests/*.test.ts",
+    "test": "tsx --test tests/**/*.test.ts tests/*.test.ts",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:score": "vite --config src/modules/score/vite.config.ts",
+    "dev:practice": "vite --config src/modules/practice/vite.config.ts",
+    "build:score": "tsc --noEmit -p src/modules/score/tsconfig.json && vite build --config src/modules/score/vite.config.ts",
+    "build:practice": "tsc --noEmit -p src/modules/practice/tsconfig.json && vite build --config src/modules/practice/vite.config.ts",
+    "test:score": "tsx --test tests/score/*.test.ts",
+    "test:practice": "tsx --test tests/practice/*.test.ts",
+    "test:browser": "tsx --test tests/integration/*.browser.ts"
   },
   "dependencies": {
     "aipc-practice-strategies": "github:fttuba-oss/AIPC-practice-strategies",
@@ -30,7 +37,10 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "oxlint": "1.69.0",
+    "playwright": "1.61.1",
     "tailwindcss": "^4.3.2",
+    "tsx": "4.23.15",
     "typescript": "~6.0.2",
     "vite": "^8.1.0"
   }

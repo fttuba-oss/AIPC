@@ -1,3 +1,20 @@
+# AIPC teacher and student workspaces
+
+The application now has separate teacher (`/teacher.html`, also `/`) and student (`/student.html`) entry points. Start the integrated development app with `npm ci` then `npm run dev` (port 5174). Login hosts can use `mountTeacherApp` and `mountStudentApp` from `src/apps/mount.tsx`; the standalone pages use explicit local demo sessions until authentication is connected.
+
+| Developer | Owned modules | Independent workflow |
+| --- | --- | --- |
+| A | Shared score viewer/following and teacher score files manager, under `src/modules/score/` | `npm run dev:score`, `/dev-score.html` on port 5180 |
+| B | Teacher practice dispatcher/progress dashboard and student plan manager, under `src/modules/practice/` | `npm run dev:practice`, `/dev-practice.html` on port 5181 |
+
+Read [developer boundaries, login integration, and migration notes](docs/DEVELOPER_BOUNDARIES.md) for the directory map, stable contracts, backend integration and ownership rules. Run `npm test`, `npm run build`, and `npm run test:browser` for validation. Node 24 is tested; Vite requires Node 20.19+ or 22.12+.
+
+Teacher assignments persist locally; students can mark them done/not done and teacher progress refreshes every three seconds. Both roles use exactly the same score viewer implementation. The independent workbenches use in-memory adapters so neither developer needs the other's feature code or backend running. Shared contracts and integration files still require coordinated changes.
+
+The old workflows remain under `src/legacy/` for staged migration. The historical overview below describes those workflows; it is not the current module map. Static hosting alone does not provide the development APIs, and demo sessions are not production authentication.
+
+---
+
 # 🎺 AIPC Teacher Portal & Student Practice Companion
 
 An AI-powered music pedagogy and practice intelligence platform. AIPC bridges the gap between music teachers and student practice by combining **MusicXML score intelligence**, **real-time acoustic pitch detection**, **automated practice plan generation**, and **interactive student companion tools**.

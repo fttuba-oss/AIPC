@@ -31,3 +31,9 @@ dist-ssr
 scratch/
 
 .vercel
+
+# Runtime assignments; existing seeded data stays tracked.
+storage/practice-plans/
+
+# Independent domain build outputs
+.aipc-build/

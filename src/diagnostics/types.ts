@@ -3,7 +3,7 @@
  * Decoupled and modular for easy extension, replacement, or separation.
  */
 
-import { NoteEvent } from '../utils/scorePlaybackParser';
+import { NoteEvent } from '../modules/score/engine/scorePlaybackParser';
 
 export type RhythmAccuracyRating = 'Perfect' | 'Great' | 'Good' | 'Early' | 'Late' | 'Miss';
 

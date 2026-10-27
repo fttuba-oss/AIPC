@@ -3,8 +3,12 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "source": "/teacher",
+      "destination": "/teacher.html"
+    },
+    {
+      "source": "/student",
+      "destination": "/student.html"
     }
   ]
 }

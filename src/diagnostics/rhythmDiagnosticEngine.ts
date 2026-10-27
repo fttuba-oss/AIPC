@@ -5,7 +5,7 @@
  * and formulates pedagogical feedback.
  */
 
-import { NoteEvent, TempoChange, beatToSeconds } from '../utils/scorePlaybackParser';
+import { NoteEvent, TempoChange, beatToSeconds } from '../modules/score/engine/scorePlaybackParser';
 import {
   RhythmOnset,
   NoteRhythmEvaluation,

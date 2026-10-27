@@ -1,0 +1,11 @@
+.orchestra-controls { background: #fff; border: 1px solid #dde4ee; border-radius: 12px; padding: 18px; margin-bottom: 20px; }
+.orchestra-options { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.orchestra-options label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.orchestra-controls p { margin: 12px 0; font-size: 13px; }
+.orchestra-faders { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)) minmax(100px, .6fr); gap: 24px; align-items: center; }
+.orchestra-faders label { display: grid; gap: 8px; font-size: 13px; font-weight: 600; }
+.orchestra-faders span { display: flex; justify-content: space-between; gap: 8px; }
+.orchestra-faders output { color: #56667e; font-weight: 400; }
+.orchestra-faders input[type=range], .orchestra-faders meter { width: 100%; accent-color: #145fbb; }
+.orchestra-faders input:disabled { opacity: .45; }
+@media (max-width: 700px) { .orchestra-faders { grid-template-columns: 1fr 1fr; gap: 16px; } .orchestra-options label { flex-wrap: wrap; } }
