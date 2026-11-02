@@ -8,6 +8,8 @@ The persistent panel beside the score provides three modes:
 
 **Hear my part** controls the student's reference independently of backing selection. **Reference audio** mutes all reference sound; the metronome remains independent. Automatic balance continues to reduce doubling/density within the audible selection.
 
+The student's current musical role is disabled in musical-line mode, with the explanation “You play this line.” Previously selected lines are suspended while the student carries them and resume when roles change. This applies to playback and previews as well as the controls and listening summary. To hear other instruments doubling the student's line, use instrument mode.
+
 Line previews play up to two bars from the current position, excluding the student's own part. They use the chosen tempo and written dynamics, have no count-in or metronome, and are available while idle. Starting practice, a demo or recording stops the preview. Previewing does not change the backing selection or score cursor.
 
 ## Annotation scope

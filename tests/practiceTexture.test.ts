@@ -34,8 +34,22 @@ test('own reference remains independent; own-only and empty line selections excl
   assert.equal(selectedPracticePart('own', [], undefined, 'fallback', null, false), true);
   assert.equal(selectedPracticePart('own', ['melody'], f, 'P13', 'P11', true), false);
   assert.equal(selectedPracticePart('lines', [], f, 'P13', 'P11', true), false);
-  assert.equal(selectedPracticePart('lines', ['melody', 'countermelody'], f, 'P21', 'P11', false), true);
+  assert.equal(selectedPracticePart('lines', ['melody', 'countermelody'], f, 'P21', 'P11', false), false);
   assert.equal(selectedPracticePart('lines', ['melody'], undefined, 'P13', 'P11', true), false);
+});
+
+test('a selected line is suspended while it is the student role, then resumes after a handoff', () => {
+  const e = textureAtMeasure(sunnyIslandTexture, 55);
+  const f = textureAtMeasure(sunnyIslandTexture, 65);
+  // Euphonium carries melody at E, then countermelody at F.
+  assert.equal(selectedPracticePart('lines', ['melody'], e, 'P13', 'P21', true), false);
+  assert.equal(selectedPracticePart('lines', ['melody'], f, 'P13', 'P21', false), true);
+  assert.equal(selectedPracticePart('lines', ['countermelody'], f, 'P4', 'P21', true), false);
+  assert.equal(selectedPracticePart('lines', ['melody'], e, 'P21', 'P21', false), true);
+  assert.equal(selectedPracticePart('instruments', [], f, 'P4', 'P21', true), true);
+  const a = textureAtMeasure(sunnyIslandTexture, 21);
+  assert.equal(selectedPracticePart('lines', ['melody'], a, 'P5', 'P2', true), false);
+  assert.equal(selectedPracticePart('lines', ['countermelody'], a, 'P11', 'P2', false), true);
 });
 
 test('annotation spans cover every written bar once and never duplicate a part across roles', () => {

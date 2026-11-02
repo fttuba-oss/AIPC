@@ -584,7 +584,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
   const handlePreviewLine = async (role: TextureRole) => {
     if (previewRole === role) { stopPreview(); return; }
-    if (!scorePlaybackData || !currentTexture || playbackPhase !== 'idle' || preparingAudio) return;
+    if (!scorePlaybackData || !currentTexture || playbackPhase !== 'idle' || preparingAudio
+      || (myPartId && currentTexture[role].includes(myPartId))) return;
     stopPreview();
     const engine = previewEngineRef.current ??= new StudentAudioEngine();
     const start = practiceBeat;

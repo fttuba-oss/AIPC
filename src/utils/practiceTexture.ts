@@ -50,10 +50,14 @@ export function textureForScore(xml?: string | null): TextureSpan[] | null {
 export function textureAtMeasure(spans: TextureSpan[] | null, measure: number): TextureSpan | undefined {
   return spans?.find(s => measure >= s.start && measure <= s.end);
 }
+/** Keep saved choices, but suspend a line whenever the student carries it. */
+export function availablePracticeRoles(roles: TextureRole[], span: TextureSpan | undefined, ownPart: string | null): TextureRole[] {
+  return roles.filter(role => !ownPart || !span?.[role].includes(ownPart));
+}
 export function selectedPracticePart(mode: PracticeMode, roles: TextureRole[], span: TextureSpan | undefined,
   partId: string, ownPart: string | null, instrumentEnabled: boolean): boolean {
   if (partId === ownPart || ownPart === null) return true; // With no part list, the caller supplies only the own-part fallback.
   if (mode === 'own') return false;
   if (mode === 'instruments') return instrumentEnabled;
-  return roles.some(role => span?.[role].includes(partId));
+  return availablePracticeRoles(roles, span, ownPart).some(role => span?.[role].includes(partId));
 }
