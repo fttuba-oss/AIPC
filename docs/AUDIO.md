@@ -63,6 +63,16 @@ requests, React renders, or browser animation cadence. Loading/error states are 
 "Play with whole band" enables the accompaniment parts and automatic balance; clicking it again
 turns the accompaniment off while retaining the student's own part. "Mute my part while I play"
 continues to apply. Individual levels, sound selection, and staff visibility remain independent.
+Written dynamics come from MusicXML rather than the iterator's global dynamic state.
+Each part/staff keeps its own level: p/pp/mp/mf/f/ff (and extended levels), explicit sound dynamics,
+closed crescendo/diminuendo wedges, and transient fp/sfz markings are supported. Nearby explicit
+levels determine hairpin targets; a closed wedge without a target uses a modest inferred change.
+Unclosed wedges and arbitrary prose directions are not invented into unlimited ramps.
+FluidSynth staves use separate expression channels, including gain changes while a tied note is
+held. VSCO hits select recorded dynamic layers; held rolls respond to the part's expression curve.
+Seeking recomputes the current level. Mixer sliders and automatic balance multiply the score
+expression rather than overwrite it. Note-on loudness is not applied twice.
+
 The algorithm attenuates doubled lines and dense textures without rewriting score dynamics.
 FluidSynth uses independent channel expression; WAV voices use independent audio gains. A master
 limiter and output headroom protect the combined output. Automatic melody-role detection is not

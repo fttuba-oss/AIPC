@@ -7,7 +7,7 @@ class AipcFluidPlayer extends AudioWorkletProcessor {
         if (data.type === 'init') {
           await globalThis.JSSynth.Synthesizer.waitForWasmInitialized();
           this.synth = new globalThis.JSSynth.Synthesizer();
-          this.synth.init(sampleRate, { midiChannelCount: 256, polyphony: 512, initialGain: 0.35, reverbActive: false, chorusActive: false });
+          this.synth.init(sampleRate, { midiChannelCount: 256, polyphony: 512, initialGain: 0.45, reverbActive: false, chorusActive: false });
           this.font = await this.synth.loadSFont(data.font);
           this.port.postMessage({ type: 'ready' });
         } else if (data.type === 'part') {

@@ -1,3 +1,4 @@
+import { REFERENCE_DYNAMIC } from './scoreDynamics';
 import * as Tone from 'tone';
 import assets from '../../audio-assets.json';
 import type { NoteEvent } from './scorePlaybackParser';
@@ -22,6 +23,12 @@ export class VscoPercussion {
   private roundRobins = new Map<string, number>();
   private players = new Set<Tone.Player>();
   private grace = new Map<string, number>();
+  private expressionValues = new Map<string, number>();
+  private rollGains = new Map<Tone.Player, { id: string; gain: Tone.Gain }>();
+  expression(id: string, value: number, time: number) {
+    this.expressionValues.set(id, value);
+    for (const roll of this.rollGains.values()) if (roll.id === id) roll.gain.gain.setTargetAtTime(value, time, 0.025);
+  }
   private destinations = new Map<string, Tone.ToneAudioNode>();
   async prepare(notes: readonly NoteEvent[], destination: (id: string) => Tone.ToneAudioNode) {
     const required = new Set<string>();
@@ -41,25 +48,31 @@ export class VscoPercussion {
       catch { this.loads.delete(file); throw new Error(`Percussion sample missing: ${file}. Run npm run setup:audio.`); }
     }));
   }
-  play(note: NoteEvent, time: number, duration: number, velocity: number): boolean {
+  play(note: NoteEvent, time: number, duration: number, velocity: number, expressive = false): boolean {
     const family = sampleFamily(note); if (!family) return false;
     const id = note.partId ?? note.instrument ?? 'default';
     const ornamentKey = `${id}:${note.percussion}:${note.beat}`;
     if (note.percussionGrace) { this.grace.set(ornamentKey, Math.min(2, (this.grace.get(ornamentKey) ?? 0) + 1)); return true; }
     const count = this.grace.get(ornamentKey) ?? 0; this.grace.delete(ornamentKey);
     const strike = (at: number, level: number, loop = false) => {
-      const layer = chooseVelocityLayer(families[family], level);
+      const layer = chooseVelocityLayer(families[family], (note.velocity ?? velocity) * level / Math.max(0.001, velocity));
       const rrKey = `${id}:${family}:${layer.velocity}`;
       const rr = this.roundRobins.get(rrKey) ?? 0; this.roundRobins.set(rrKey, rr + 1);
       const buffer = this.buffers.get(layer.files[rr % layer.files.length]);
       if (!buffer) throw new Error(`Percussion bank was not prepared for ${family}`);
+      const offset = note.resumeOffsetSeconds ? (note.percussionRoll ? (loop ? Math.min(0.8, buffer.duration * 0.15) : 0) : note.resumeOffsetSeconds) : 0;
+      if (!loop && offset >= buffer.duration) return;
       const player = new Tone.Player({ url: buffer, fadeOut: loop ? 0.12 : 0.04, loop });
-      player.volume.value = -6 + 20 * Math.log10(Math.max(0.15, Math.min(1.25, level / Math.max(0.25, layer.velocity))));
-      player.connect(this.destinations.get(id)!);
+      const hitLevel = expressive && !note.percussionRoll ? level * (note.velocity ?? REFERENCE_DYNAMIC) / REFERENCE_DYNAMIC : level;
+      player.volume.value = -6 + 20 * Math.log10(Math.max(0.001, Math.min(4, hitLevel / Math.max(0.25, layer.velocity))));
+      if (note.percussionRoll && expressive) {
+        const gain = new Tone.Gain(this.expressionValues.get(id) ?? 1).connect(this.destinations.get(id)!);
+        player.connect(gain); this.rollGains.set(player, { id, gain });
+      } else player.connect(this.destinations.get(id)!);
       this.players.add(player);
-      player.onstop = () => { this.players.delete(player); player.dispose(); };
+      player.onstop = () => { this.players.delete(player); this.rollGains.get(player)?.gain.dispose(); this.rollGains.delete(player); player.dispose(); };
       if (loop) { player.loopStart = Math.min(0.8, buffer.duration * 0.15); player.loopEnd = Math.max(player.loopStart + 0.1, buffer.duration - 0.25); }
-      player.start(Math.max(Tone.immediate(), at));
+      player.start(Math.max(Tone.immediate(), at), offset);
       if (loop) player.stop(at + Math.max(0.12, duration));
     };
     for (let i = count; i > 0; i--) strike(time - i * 0.025, velocity * 0.55);
@@ -70,5 +83,5 @@ export class VscoPercussion {
     return true;
   }
   stop() { for (const player of this.players) { player.stop(); } this.grace.clear(); }
-  dispose() { this.stop(); for (const buffer of this.buffers.values()) buffer.dispose(); this.buffers.clear(); this.loads.clear(); this.destinations.clear(); }
+  dispose() { this.stop(); for (const buffer of this.buffers.values()) buffer.dispose(); this.buffers.clear(); this.loads.clear(); this.destinations.clear(); this.expressionValues.clear(); }
 }

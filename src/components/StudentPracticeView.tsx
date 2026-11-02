@@ -772,6 +772,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
         instrumentName,
         notes: buildBackingNotes(activeNotes, false),
         tempos: spData?.tempos,
+        dynamics: spData?.dynamics,
         metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm
@@ -852,6 +853,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
         instrumentName,
         notes: buildBackingNotes(activeNotes, true),
         tempos: spData?.tempos,
+        dynamics: spData?.dynamics,
         metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm
@@ -1066,6 +1068,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
         instrumentName,
         notes: buildBackingNotes(activeNotes, false),
         tempos: spData?.tempos,
+        dynamics: spData?.dynamics,
         metronomeMeasures: spData?.metronomeMeasures,
       },
       effectiveBpm

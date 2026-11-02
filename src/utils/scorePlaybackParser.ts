@@ -1,3 +1,4 @@
+import { readScoreDynamics, partDynamicAt, type PartDynamics } from './scoreDynamics';
 import { articulateNotes } from './noteArticulation';
 import { percussionKey } from './percussionPlayback';
 import { readPlaybackTranspositions, transpositionAt, writtenPitchToMidi } from './playbackTransposition';
@@ -17,6 +18,8 @@ export interface NoteEvent {
   beat: number;         // Start beat position (quarter note = 1.0)
   durationBeats: number;// Duration in beats
   measureNumber: number;// Measure index (1-based)
+  resumeOffsetSeconds?: number; // Playback-only offset when seeking into a held note.
+  staffNumber?: number;
   velocity?: number;    // Dynamic velocity (0.0 to 1.0)
   legatoToNext?: boolean;
   legatoFromPrevious?: boolean;
@@ -53,6 +56,7 @@ export interface ScorePlaybackData {
   tempos: TempoChange[];
   durationInSeconds: number;
   clicks: MetronomeClick[];
+  dynamics?: PartDynamics[];
   cursorPositions: CursorPosition[];
   measureStartBeats: number[];
   metronomeMeasures?: MetronomeMeasure[];
@@ -251,16 +255,13 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
   });
 
   const cursorPositions: CursorPosition[] = [];
-  const partRunningVolume = new Map<string, number>();
-  partsMap.forEach((_, partId) => {
-    partRunningVolume.set(partId, 0.75);
-  });
-
   const measures = osmd.Sheet?.SourceMeasures || [];
   const measureIndices = new Map(measures.map((measure, index) => [measure, index]));
   const xmlDocument = rawXml ? new DOMParser().parseFromString(rawXml, 'application/xml') : null;
   const playbackTranspositions = xmlDocument && !xmlDocument.querySelector('parsererror')
     ? readPlaybackTranspositions(xmlDocument) : null;
+  const scoreDynamics = xmlDocument && !xmlDocument.querySelector('parsererror')
+    ? readScoreDynamics(xmlDocument, measures.map(measure => measure.AbsoluteTimestamp.RealValue * 4)) : [];
   const getMeasureNumberForBeat = (beat: number): number => {
     let matchedNum = 1;
     for (const m of measures) {
@@ -300,28 +301,6 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
         time: timeInSeconds,
         beat: timestampInBeats,
       });
-
-      // Track active dynamics
-      const activeExprs = (iterator as any).ActiveDynamicExpressions;
-      if (activeExprs && activeExprs.length > 0) {
-        activeExprs.forEach((expr: any) => {
-          const dyn = expr?.dynamicEnum ?? expr?.DynEnum;
-          if (dyn !== undefined) {
-            let stepVolume = 0.75;
-            if (dyn <= 3) stepVolume = 0.35;
-            else if (dyn === 4) stepVolume = 0.50;
-            else if (dyn === 5) stepVolume = 0.65;
-            else if (dyn === 6) stepVolume = 0.72;
-            else if (dyn === 7) stepVolume = 0.82;
-            else if (dyn === 8) stepVolume = 0.92;
-            else if (dyn >= 9) stepVolume = 1.0;
-
-            for (const partId of partRunningVolume.keys()) {
-              partRunningVolume.set(partId, stepVolume);
-            }
-          }
-        });
-      }
 
       const voiceEntries = iterator.CurrentVoiceEntries;
       const fallbackMeasureNumber = getMeasureNumberForBeat(timestampInBeats);
@@ -366,7 +345,7 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
               const endTimeInSeconds = beatToSeconds(endBeat, tempos);
               const durationInSeconds = Math.max(0.04, endTimeInSeconds - timeInSeconds);
 
-              const velocity = partRunningVolume.get(partId) ?? 0.75;
+              const velocity = partDynamicAt(scoreDynamics, partId, timestampInBeats, staff);
               const noteMeasureNumber = note.SourceMeasure?.MeasureNumber ??
                 (voiceEntry as any)?.parentSourceStaffEntry?.parentMeasure?.MeasureNumber ??
                 fallbackMeasureNumber;
@@ -394,6 +373,7 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
                 durationBeats,
                 measureNumber: noteMeasureNumber,
                 velocity,
+                staffNumber: staff,
                 rawNote: note,
               });
             });
@@ -478,7 +458,8 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
       parts,
       tempos,
       durationInSeconds: maxTime,
-      clicks: uniqueClicks,
+      dynamics: scoreDynamics,
+    clicks: uniqueClicks,
       cursorPositions,
       measureStartBeats,
       metronomeMeasures: measures.map(measure => ({

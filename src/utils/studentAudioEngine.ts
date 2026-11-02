@@ -1,3 +1,4 @@
+import { partDynamicAt, REFERENCE_DYNAMIC, type PartDynamics } from './scoreDynamics';
 import { articulatedGate } from './noteArticulation';
 import { FluidR3Player } from './fluidR3Player';
 import { VscoPercussion, sampleFamily } from './vscoPercussion';
@@ -34,6 +35,7 @@ export interface SectionPlaybackConfig {
   ladderLevel?: number;
   subdivision?: MetronomeSubdivision;
   tempos?: TempoChange[];
+  dynamics?: PartDynamics[];
   metronomeMeasures?: MetronomeMeasure[];
 }
 
@@ -45,6 +47,9 @@ export class StudentAudioEngine {
   private partBuses = new Map<string, Tone.Gain>();
   private fluid = new FluidR3Player();
   private percussion = new VscoPercussion();
+  private dynamicLevels = new Map<string, number>();
+  private dynamicBeat = 0;
+  private fluidRoutes = new Map<string, { partId: string; staff: number }>();
   private balanceFrames = new Map<number, NoteEvent[]>();
 
   setAutomaticBalance(enabled: boolean) {
@@ -65,10 +70,13 @@ export class StudentAudioEngine {
   private refreshPartGains(time: number, immediate = false) {
     const automatic = this.automaticBalance
       ? ensembleGains(this.currentBalanceNotes, this.partMix) : new Map<string, number>();
-    for (const id of this.partMix.keys()) {
-      this.fluid.gain(id, (this.partMix.get(id) ?? 1) * (automatic.get(id) ?? 1), time);
+    for (const [route, part] of this.fluidRoutes) {
+      const level = this.activeConfig?.dynamics?.length
+        ? partDynamicAt(this.activeConfig.dynamics, part.partId, this.dynamicBeat, part.staff) / REFERENCE_DYNAMIC : 1;
+      this.fluid.gain(route, (this.partMix.get(part.partId) ?? 1) * (automatic.get(part.partId) ?? 1) * level, time);
     }
     for (const [id, bus] of this.partBuses) {
+      this.percussion.expression(id, this.dynamicLevels.get(id) ?? 1, time);
       const gain = (this.partMix.get(id) ?? 1) * (automatic.get(id) ?? 1);
       bus.gain.cancelScheduledValues(time);
       if (immediate) bus.gain.setValueAtTime(gain, time);
@@ -161,8 +169,8 @@ export class StudentAudioEngine {
     if ((this.partMix.get(id) ?? 1) <= 0) return;
     const velocity = Math.max(0, Math.min(1, baseVelocity));
     if (velocity === 0) return;
-    if (this.percussion.play(note, time, duration, velocity)) return;
-    this.fluid.play(id + (note.percussion !== undefined ? ':gm-drums' : ''), note.pitch, velocity, time, duration);
+    if (this.percussion.play(note, time, duration, velocity, !!this.activeConfig?.dynamics?.length)) return;
+    this.fluid.play(id + ':staff:' + (note.staffNumber ?? 1) + (note.percussion !== undefined ? ':gm-drums' : ''), note.pitch, velocity, time, duration);
   }
 
   private backingVolumePercent: number = 75;
@@ -284,9 +292,14 @@ export class StudentAudioEngine {
     await Tone.start();
     if (generation !== this.playbackGeneration) return;
     this.ensureInitialized();
-    const parts = (config.notes || []).filter(note => !sampleFamily(note)).map(note => ({
-      id: (note.partId ?? note.instrument ?? 'default') + (note.percussion !== undefined ? ':gm-drums' : ''), instrument: note.percussion !== undefined ? 'piano' : note.instrument ?? 'trumpet', drum: note.percussion !== undefined,
-    }));
+    this.fluidRoutes.clear();
+    const parts = (config.notes || []).filter(note => !sampleFamily(note)).map(note => {
+      const partId = note.partId ?? note.instrument ?? 'default';
+      const staff = note.staffNumber ?? 1;
+      const id = partId + ':staff:' + staff + (note.percussion !== undefined ? ':gm-drums' : '');
+      this.fluidRoutes.set(id, { partId, staff });
+      return { id, instrument: note.percussion !== undefined ? 'piano' : note.instrument ?? 'trumpet', drum: note.percussion !== undefined };
+    });
     await Promise.all([
       this.preloadInstruments(parts),
       this.percussion.prepare(config.notes || [], id => this.partBus(id)),
@@ -368,6 +381,16 @@ export class StudentAudioEngine {
     this.onTimeUpdateCallback?.(scoreSeconds, this.sectionDurationSeconds, this.getElapsedPlaybackSeconds());
   }
 
+  private applyDynamics(beat: number) {
+    this.dynamicBeat = beat;
+    this.dynamicLevels.clear();
+    const tracks = this.activeConfig?.dynamics;
+    if (!tracks?.length) return;
+    for (const id of new Set(tracks.map(track => track.partId))) {
+      this.dynamicLevels.set(id, partDynamicAt(tracks, id, beat) / REFERENCE_DYNAMIC);
+    }
+  }
+
   private scheduleEvents(fromBeat: number, fromRealSeconds: number, generation: number) {
     const config = this.activeConfig!;
     const endBeat = this.sectionBounds().end;
@@ -386,6 +409,23 @@ export class StudentAudioEngine {
         }, time);
       }, at(click.beat));
     }
+    this.applyDynamics(fromBeat);
+    const expressionBeats = new Set<number>();
+    for (const track of config.dynamics || []) {
+      for (let i = 0; i < track.points.length; i++) {
+        const point = track.points[i];
+        if (point.beat > fromBeat && point.beat < endBeat) expressionBeats.add(point.beat);
+        const previous = track.points[i - 1];
+        if (!point.ramp || !previous || point.beat <= fromBeat || previous.beat >= endBeat) continue;
+        const start = this.scoreSeconds(Math.max(previous.beat, fromBeat));
+        const end = this.scoreSeconds(Math.min(point.beat, endBeat));
+        for (let seconds = start; seconds < end; seconds += 0.05 * this.speedMultiplier) expressionBeats.add(this.scoreBeat(seconds));
+      }
+    }
+    for (const beat of [...expressionBeats].sort((a, b) => a - b)) Tone.Transport.schedule(time => {
+      if (generation !== this.playbackGeneration) return;
+      this.applyDynamics(beat); this.refreshPartGains(time);
+    }, at(beat));
     this.currentBalanceNotes = (config.notes || []).filter(n => n.beat <= fromBeat && n.beat + n.durationBeats > fromBeat);
     this.refreshPartGains(Tone.now(), true);
     for (const [beat, active] of this.balanceFrames) {
@@ -393,17 +433,26 @@ export class StudentAudioEngine {
       Tone.Transport.schedule(time => {
         if (generation !== this.playbackGeneration) return;
         this.currentBalanceNotes = active;
-        this.refreshPartGains(time);
+        this.applyDynamics(beat); this.refreshPartGains(time);
       }, at(beat));
     }
     for (const note of config.notes || []) {
-      if (note.measureNumber < config.startMeasure || note.measureNumber > config.endMeasure || note.beat < fromBeat - 1e-7 || note.beat >= endBeat) continue;
-      const nominalDuration = (this.scoreSeconds(note.beat + note.durationBeats) - this.scoreSeconds(note.beat)) / this.speedMultiplier;
+      const noteEnd = note.beat + note.durationBeats;
+      if (note.beat >= endBeat || (note.percussionGrace ? note.beat < fromBeat - 1e-7 : noteEnd <= fromBeat + 1e-7)) continue;
+      const eventBeat = Math.max(note.beat, fromBeat);
+      const eventNote = eventBeat > note.beat ? { ...note, beat: eventBeat,
+        velocity: config.dynamics?.length && note.partId ? partDynamicAt(config.dynamics, note.partId, eventBeat, note.staffNumber) : note.velocity,
+        resumeOffsetSeconds: (this.scoreSeconds(eventBeat) - this.scoreSeconds(note.beat)) / this.speedMultiplier,
+      } : note;
+      const nominalDuration = (this.scoreSeconds(noteEnd) - this.scoreSeconds(eventBeat)) / this.speedMultiplier;
       const { duration, attackScale } = articulatedGate(note, nominalDuration);
       Tone.Transport.schedule((time) => {
         if (generation !== this.playbackGeneration || this.isAudioBackingMuted) return;
-        this.triggerNote(note, Tone.Frequency(note.pitch, 'midi').toNote(), duration, time, (note.velocity ?? 0.8) * attackScale);
-      }, at(note.beat));
+        // Expression carries the written level, including changes while a note is held.
+        // A fixed reference attack avoids applying the written dynamic twice.
+        const attack = config.dynamics?.length ? REFERENCE_DYNAMIC : note.velocity ?? 0.8;
+        this.triggerNote(eventNote, Tone.Frequency(note.pitch, 'midi').toNote(), duration, time, attack * attackScale);
+      }, at(eventBeat));
     }
     Tone.Transport.schedule((time) => Tone.Draw.schedule(() => {
       if (generation === this.playbackGeneration) this.finishPlayback();

@@ -13,6 +13,7 @@ export class FluidR3Player {
   private channels = new Map<string, number>();
   private context?: AudioContext;
   private lastError?: Error;
+  private expressionValues = new Map<number, number>();
   private generation = 0;
   private abort?: AbortController;
   private cancelInitialization?: () => void;
@@ -73,13 +74,16 @@ export class FluidR3Player {
   gain(id: string, value: number, at: number) {
     if (!this.node) return;
     for (const [key, channel] of this.channels) if (key === id || key === id + ':gm-drums') {
-      this.node.port.postMessage({ type: 'events', events: [{ type: 'gain', channel, value: Math.round(Math.max(0, Math.min(1.25, value)) / 1.25 * 127), at, order: -1 }] });
+      const control = Math.round(127 * Math.sqrt(Math.max(0, Math.min(2, value)) / 2));
+      if (this.expressionValues.get(channel) === control) continue;
+      this.expressionValues.set(channel, control);
+      this.node.port.postMessage({ type: 'events', events: [{ type: 'gain', channel, value: control, at, order: -1 }] });
     }
   }
-  stop() { this.node?.port.postMessage({ type: 'stop' }); }
+  stop() { this.expressionValues.clear(); this.node?.port.postMessage({ type: 'stop' }); }
   dispose() {
     this.generation++; this.abort?.abort(); this.cancelInitialization?.(); this.cancelInitialization = undefined;
     this.node?.port.postMessage({ type: 'close' }); this.node?.disconnect(); this.node = undefined;
-    this.loading = undefined; this.channels.clear(); this.lastError = undefined;
+    this.loading = undefined; this.channels.clear(); this.expressionValues.clear(); this.lastError = undefined;
   }
 }
