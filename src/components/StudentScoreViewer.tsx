@@ -14,6 +14,7 @@ interface StudentScoreViewerProps {
   xmlUrl?: string;
   xmlContent?: string | null;
   startMeasure: number;
+  playbackStartBeat?: number | null;
   endMeasure: number;
   sectionStartMeasure?: number;
   sectionEndMeasure?: number;
@@ -50,6 +51,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   xmlUrl,
   xmlContent,
   startMeasure,
+  playbackStartBeat,
   endMeasure,
   sectionStartMeasure = startMeasure,
   sectionEndMeasure = endMeasure,
@@ -131,7 +133,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     const wrap = wrapper.getBoundingClientRect();
     const svgs = Array.from(container.querySelectorAll('svg'));
     const systems = new Map<object, number>();
-    const rows: { beat: number; endBeat: number; right: number; top: number; height: number; system: number; entries: { beat: number; x: number }[] }[] = [];
+    const rows: { beat: number; endBeat: number; left: number; right: number; top: number; height: number; system: number; entries: { beat: number; x: number }[] }[] = [];
     for (const measureRow of osmd.GraphicSheet?.MeasureList || []) {
       const visible = measureRow.filter((m: any) => m && m.getVFStave?.()?.width > 0);
       if (!visible.length) continue;
@@ -144,24 +146,37 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       if (!source || !matrix) continue;
       if (!systems.has(system)) systems.set(system, systems.size);
       const project = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(matrix);
-      let top = Infinity, bottom = -Infinity, right = -Infinity;
+      let top = Infinity, bottom = -Infinity, left = Infinity, firstNoteLeft = Infinity, right = -Infinity;
       const entries = new Map<number, number>();
       for (const m of visible as any[]) {
         const stave = m.getVFStave();
+        let restStartX = stave.x;
+        for (const modifier of stave.getModifiers?.() || []) {
+          const category = String(modifier.getCategory?.() || '').toLowerCase();
+          if (category.includes('timesig') && modifier.getPosition?.() === 5) {
+            restStartX = Math.max(restStartX, modifier.getX() + modifier.getWidth());
+          }
+        }
+        left = Math.min(left, project(restStartX, stave.y).x - wrap.left);
         top = Math.min(top, project(stave.x, stave.getYForLine(0)).y - wrap.top - 12);
         bottom = Math.max(bottom, project(stave.x, stave.getYForLine(4)).y - wrap.top + 12);
         right = Math.max(right, project(stave.x + stave.width - 3, stave.y).x - wrap.left);
         for (const se of m.staffEntries || []) {
           const beat = se.getAbsoluteTimestamp().RealValue * 4;
           let x = project(se.PositionAndShape.AbsolutePosition.x * 10, 0).x - wrap.left;
-          // Prefer the actual notehead centre; rests fall back to the staff-entry coordinate.
+          // Align note onsets with the left edge of the notehead; rests fall back to the staff-entry coordinate.
           for (const voice of se.graphicalVoiceEntries || []) {
             let found = false;
             for (const note of voice.notes || []) {
+              if (note.sourceNote?.isRest?.()) continue;
               try {
                 const head = note.getNoteheadSVGs?.()?.[0];
                 const rect = head?.getBoundingClientRect();
-                if (rect?.width) { x = rect.left - wrap.left + rect.width / 2; found = true; break; }
+                if (rect?.width) { x = rect.left - wrap.left - 4;
+                  if (beat === source.AbsoluteTimestamp.RealValue * 4) {
+                    firstNoteLeft = Math.min(firstNoteLeft, x);
+                  }
+                  found = true; break; }
               } catch { /* Rest or unrendered note: use the graphical staff entry. */ }
             }
             if (found) break;
@@ -172,13 +187,18 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       if (!Number.isFinite(top) || !entries.size) continue;
       rows.push({ beat: source.AbsoluteTimestamp.RealValue * 4,
         endBeat: (source.AbsoluteTimestamp.RealValue + source.Duration.RealValue) * 4,
+        left: Number.isFinite(firstNoteLeft) ? firstNoteLeft
+          : left,
         right, top, height: bottom - top, system: systems.get(system)!,
         entries: Array.from(entries, ([beat, x]) => ({ beat, x })).sort((a, b) => a.beat - b.beat) });
     }
     const anchors: TrackerAnchor[] = [];
     rows.forEach((row, i) => {
       const geometry = { top: row.top, height: row.height, system: row.system };
-      row.entries.forEach(entry => anchors.push({ ...geometry, ...entry }));
+      // Start on the first notehead, or in the space before an opening rest.
+      anchors.push({ ...geometry, beat: row.beat, x: row.left });
+      row.entries.filter(entry => entry.beat > row.beat)
+        .forEach(entry => anchors.push({ ...geometry, ...entry }));
       // Sustain to the end of a system before moving to the next line at the exact beat.
       if (!rows[i + 1] || rows[i + 1].system !== row.system) {
         anchors.push({ ...geometry, beat: row.endBeat, x: row.right });
@@ -188,18 +208,18 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     const data = playbackRef.current;
     const seconds = data.getPlaybackTime?.() ?? data.playbackProgress;
     drawTracker(seconds < 0
-      ? (scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
+      ? (playbackStartBeat ?? scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
       : secondsToBeats(seconds, scoreData?.tempos || []));
-  }, [drawTracker, scoreData, startMeasure]);
+  }, [drawTracker, scoreData, startMeasure, playbackStartBeat]);
 
   // Retain click/seek integration without showing OSMD's separate cursor.
   const positionCustomCursor = useCallback((osmd: OpenSheetMusicDisplay, isIdle = false) => {
     osmd.cursor?.hide();
     const beat = isIdle
-      ? (scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
+      ? (playbackStartBeat ?? scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
       : ((osmd.cursor?.Iterator.CurrentSourceTimestamp?.RealValue ?? 0) * 4);
     drawTracker(beat);
-  }, [drawTracker, scoreData, startMeasure]);
+  }, [drawTracker, scoreData, startMeasure, playbackStartBeat]);
 
   /**
    * Cache rendered graphical note references filtered to the active measure range.
@@ -297,9 +317,9 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     });
 
     // Apply strict engraving rules for accurate tuplet rendering and system line breaks
-    osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
-    osmd.EngravingRules.NewSystemAtXMLNewPageAttribute = true;
-    osmd.EngravingRules.StretchLastSystemLine = true;
+    osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = false;
+    osmd.EngravingRules.NewSystemAtXMLNewPageAttribute = false;
+    osmd.EngravingRules.StretchLastSystemLine = false;
     osmd.EngravingRules.PageTopMargin = 0;
     (window as any).osmd = osmd;
     osmd.EngravingRules.PageBottomMargin = 0;
@@ -511,14 +531,14 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       const data = playbackRef.current;
       const seconds = data.getPlaybackTime?.() ?? data.playbackProgress;
       const beat = seconds < 0
-        ? (scoreData.measureStartBeatByNumber?.[startMeasure] ?? scoreData.measureStartBeats[startMeasure - 1] ?? 0)
+        ? (playbackStartBeat ?? scoreData.measureStartBeatByNumber?.[startMeasure] ?? scoreData.measureStartBeats[startMeasure - 1] ?? 0)
         : secondsToBeats(seconds, scoreData.tempos);
       drawTracker(beat, isPlaying && seconds >= 0);
       if (isPlaying) frame = requestAnimationFrame(tick);
     };
     tick();
     return () => cancelAnimationFrame(frame);
-  }, [isPlaying, isLoaded, scoreData, startMeasure, drawTracker]);
+  }, [isPlaying, isLoaded, scoreData, startMeasure, playbackStartBeat, drawTracker]);
 
   // Idle seeks and a stopped transport should update immediately and remain motionless.
   useEffect(() => {
@@ -664,7 +684,9 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     if (clickedMeasureNumber !== -1) {
       let clickedMeasureBeat = 0;
       const measureStartBeats = scoreData?.measureStartBeats || [];
-      if (clickedMeasureNumber > 0 && measureStartBeats[clickedMeasureNumber - 1] !== undefined) {
+      if (scoreData.measureStartBeatByNumber?.[clickedMeasureNumber] !== undefined) {
+        clickedMeasureBeat = scoreData.measureStartBeatByNumber[clickedMeasureNumber];
+      } else if (clickedMeasureNumber > 0 && measureStartBeats[clickedMeasureNumber - 1] !== undefined) {
         clickedMeasureBeat = measureStartBeats[clickedMeasureNumber - 1];
       } else {
         for (let i = 0; i < measureList.length; i++) {
@@ -700,7 +722,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       }
       cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
       osmd.cursor.update();
-      positionCustomCursor(osmd);
+      drawTracker(clickedMeasureBeat, true);
     }
   };
 

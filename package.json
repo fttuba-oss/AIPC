@@ -8,12 +8,16 @@
     "dev:teacher": "vite --port 5174",
     "dev:student": "vite --port 5175",
     "build": "tsc -b && vite build",
-    "test": "npx tsx --test tests/**/*.test.ts tests/*.test.ts",
+    "test": "tsx --test tests/**/*.test.ts tests/*.test.ts",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "setup:audio": "node scripts/setup-audio.mjs",
+    "predev": "npm run setup:audio",
+    "prebuild": "npm run setup:audio"
   },
   "dependencies": {
     "aipc-practice-strategies": "github:fttuba-oss/AIPC-practice-strategies",
+    "js-synthesizer": "1.13.0",
     "jszip": "^3.10.1",
     "lucide-react": "^1.22.0",
     "opensheetmusicdisplay": "^2.0.0",
@@ -30,7 +34,9 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "oxlint": "1.69.0",
     "tailwindcss": "^4.3.2",
+    "tsx": "4.20.6",
     "typescript": "~6.0.2",
     "vite": "^8.1.0"
   }

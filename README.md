@@ -48,7 +48,7 @@ Pre-loaded with sample repertoire to test various instrument difficulties:
 ## 🚀 Getting Started
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (version 18+ recommended)
+- [Node.js](https://nodejs.org/) (version 24 LTS recommended)
 - [npm](https://www.npmjs.com/) or [pnpm](https://pnpm.io/)
 - A modern browser (Chrome, Edge, Firefox, Safari) with **microphone access enabled** for student practice pitch detection.
 
@@ -62,7 +62,7 @@ Pre-loaded with sample repertoire to test various instrument difficulties:
 
 2. Install dependencies:
    ```bash
-   npm install
+   npm ci
    ```
 
 3. Start the development server:
@@ -127,3 +127,7 @@ The **Student Practice Companion** requires microphone access for real-time acou
 ## 📄 License
 
 This project is licensed under the MIT License - see the repository details for more information.
+
+## Audio playback and Windows setup
+
+See [Integrated practice playback](docs/AUDIO.md) for FluidR3/FluidSynth, VSCO orchestral percussion, sound-bank installation, controls, credits, and validation. On Windows PowerShell, use `npm.cmd ci` and `npm.cmd run dev -- --host 127.0.0.1 --port 5174 --strictPort`. The first dev/build run prepares the audio assets automatically.

@@ -31,3 +31,6 @@ dist-ssr
 scratch/
 
 .vercel
+
+# Downloaded, reproducible audio banks (npm run setup:audio)
+/public/audio/vendor/

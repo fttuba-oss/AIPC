@@ -15,6 +15,9 @@ export interface InstrumentTrack {
 }
 
 interface EnsembleMixerPanelProps {
+  onPlayAllParts: () => void;
+  automaticBalance: boolean;
+  onAutomaticBalanceChange: (enabled: boolean) => void;
   userInstrument: string; // e.g. 'Flute 2'
   /** Parts of this score, for the 'I'm practising' picker. */
   parts?: { id: string; name: string }[];
@@ -33,6 +36,9 @@ interface EnsembleMixerPanelProps {
 }
 
 export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = ({
+  onPlayAllParts,
+  automaticBalance,
+  onAutomaticBalanceChange,
   userInstrument,
   parts = [],
   myPartId = null,
@@ -101,6 +107,19 @@ export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = ({
         </div>
       )}
 
+      <div className="px-5 pb-3 space-y-2">
+        <button type="button" onClick={onPlayAllParts}
+          aria-pressed={tracks.some(track => track.id !== myPartId) && tracks.filter(track => track.id !== myPartId).every(track => !track.isMuted)}
+          className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+          Play with whole band
+        </button>
+        <label className="flex items-center gap-2 text-xs text-slate-700">
+          <input type="checkbox" checked={automaticBalance}
+            onChange={event => onAutomaticBalanceChange(event.target.checked)} />
+          Automatic balance
+        </label>
+        <p className="text-[11px] text-slate-500">Reduces doubled lines and dense passages. Use Play to start; “Mute my part” still applies.</p>
+      </div>
       <div className="px-5 pb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Practise with</div>
       {/* Scrollable Instrument Track Hierarchy */}
       <div className="flex-1 overflow-y-auto px-4 py-1 space-y-3.5">

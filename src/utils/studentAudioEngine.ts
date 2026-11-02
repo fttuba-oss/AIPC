@@ -1,3 +1,6 @@
+import { articulatedGate } from './noteArticulation';
+import { FluidR3Player } from './fluidR3Player';
+import { VscoPercussion, sampleFamily } from './vscoPercussion';
 /**
  * Student Practice Audio & Metronome Engine
  * Built with Tone.js
@@ -9,41 +12,9 @@
  */
 
 import * as Tone from 'tone';
+import { ensembleFrames, ensembleGains } from './ensembleBalance';
 import { beatToSeconds, secondsToBeats, type NoteEvent, type TempoChange } from './scorePlaybackParser';
-import { loadOrchestralSampler } from './orchestralSampleEngine';
 
-function loadSoundfontScript(catalog: string, instrument: string): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    const globalMidi = (window as any).MIDI;
-    if (globalMidi?.Soundfont?.[instrument]) {
-      resolve(globalMidi.Soundfont[instrument]);
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = `https://gleitz.github.io/midi-js-soundfonts/${catalog}/${instrument}-mp3.js`;
-    script.async = true;
-
-    const timer = setTimeout(() => {
-      reject(new Error(`Timeout loading soundfont ${instrument}`));
-    }, 4000);
-
-    script.onload = () => {
-      clearTimeout(timer);
-      const midiData = (window as any).MIDI?.Soundfont?.[instrument];
-      if (midiData) {
-        resolve(midiData);
-      } else {
-        reject(new Error(`Soundfont data for ${instrument} not found.`));
-      }
-    };
-    script.onerror = () => {
-      clearTimeout(timer);
-      reject(new Error(`Failed to load soundfont script for ${instrument}`));
-    };
-    document.body.appendChild(script);
-  });
-}
 
 import { metronomeEvents, meterAtBeat, pulseQuarterNotes, countInPulses, type MetronomeMeasure, type MetronomeSubdivision } from './metronome';
 export type { MetronomeSubdivision } from './metronome';
@@ -67,10 +38,43 @@ export interface SectionPlaybackConfig {
 }
 
 export class StudentAudioEngine {
-  private synth: Tone.PolySynth | null = null;
-  private sampler: Tone.Sampler | null = null;
   private metronomeSynth: Tone.PolySynth | null = null;
   private hallReverb: Tone.Freeverb | null = null;
+  private outputLimiter: Tone.Limiter | null = null;
+  private automaticBalance = false;
+  private partBuses = new Map<string, Tone.Gain>();
+  private fluid = new FluidR3Player();
+  private percussion = new VscoPercussion();
+  private balanceFrames = new Map<number, NoteEvent[]>();
+
+  setAutomaticBalance(enabled: boolean) {
+    this.automaticBalance = enabled;
+    this.refreshPartGains(Tone.now());
+  }
+
+  private partBus(id: string): Tone.Gain {
+    let bus = this.partBuses.get(id);
+    if (!bus) {
+      bus = new Tone.Gain(this.partMix.get(id) ?? 1).connect(this.hallReverb || this.backingVolume!);
+      this.partBuses.set(id, bus);
+    }
+    return bus;
+  }
+
+  private currentBalanceNotes: NoteEvent[] = [];
+  private refreshPartGains(time: number, immediate = false) {
+    const automatic = this.automaticBalance
+      ? ensembleGains(this.currentBalanceNotes, this.partMix) : new Map<string, number>();
+    for (const id of this.partMix.keys()) {
+      this.fluid.gain(id, (this.partMix.get(id) ?? 1) * (automatic.get(id) ?? 1), time);
+    }
+    for (const [id, bus] of this.partBuses) {
+      const gain = (this.partMix.get(id) ?? 1) * (automatic.get(id) ?? 1);
+      bus.gain.cancelScheduledValues(time);
+      if (immediate) bus.gain.setValueAtTime(gain, time);
+      else bus.gain.setTargetAtTime(gain, time, 0.025);
+    }
+  }
 
   private backingVolume: Tone.Volume | null = null;
   private metronomeVolume: Tone.Volume | null = null;
@@ -100,7 +104,6 @@ export class StudentAudioEngine {
   private sectionDurationSeconds: number = 0;
   private sectionStartTimeSeconds: number = 0;
   private transportOriginScoreSeconds: number = 0;
-  private soundfontLoadedInstrument: string | null = null;
 
   constructor() {
     // Lazy initialized on first user gesture
@@ -109,7 +112,8 @@ export class StudentAudioEngine {
   private ensureInitialized() {
     if (this.backingVolume) return;
 
-    this.backingVolume = new Tone.Volume(0).toDestination();
+    this.outputLimiter = new Tone.Limiter(-1).toDestination();
+    this.backingVolume = new Tone.Volume(-6).connect(this.outputLimiter);
     this.metronomeVolume = new Tone.Volume(-2).toDestination();
     this.backingVolume.mute = this.isAudioBackingMuted;
     this.metronomeVolume.mute = this.isMetronomeMuted;
@@ -121,17 +125,6 @@ export class StudentAudioEngine {
       dampening: 3400,
       wet: 0.16,
     }).connect(this.backingVolume);
-
-    // High quality expressive synth fallback
-    this.synth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'triangle' },
-      envelope: {
-        attack: 0.02,
-        decay: 0.1,
-        sustain: 0.7,
-        release: 0.1,
-      },
-    }).connect(this.hallReverb);
 
     // Crisp metronome click synth
     this.metronomeSynth = new Tone.PolySynth(Tone.MembraneSynth, {
@@ -147,90 +140,31 @@ export class StudentAudioEngine {
     }).connect(this.metronomeVolume);
   }
 
-  async preloadSoundfont(instrument: string = 'trumpet') {
-    if (this.soundfontLoadedInstrument === instrument && this.sampler) return;
-    this.ensureInitialized();
-
-    const outputBus = this.hallReverb || this.backingVolume!;
-
-    // 1. Primary: Real Acoustic Orchestral Instrument (VSCO 2 CE & Iowa EMS)
-    try {
-      const acousticSampler = await loadOrchestralSampler(instrument, outputBus);
-      if (acousticSampler) {
-        if (this.sampler) {
-          try { this.sampler.dispose(); } catch { /* ignore */ }
-        }
-        this.sampler = acousticSampler;
-        this.soundfontLoadedInstrument = instrument;
-        console.log(`[StudentAudioEngine] Real acoustic orchestral instrument (${instrument}) loaded via VSCO 2 CE.`);
-        return;
-      }
-    } catch (acousticErr) {
-      console.warn(`[StudentAudioEngine] Orchestral sampler failed for ${instrument}, attempting legacy fallback`, acousticErr);
-    }
-
-    // 2. Secondary: MusyngKite Soundfont
-    try {
-      const soundData = await loadSoundfontScript('MusyngKite', instrument);
-      this.sampler = await new Promise<Tone.Sampler>((resolve) => {
-        const s = new Tone.Sampler({
-          urls: soundData,
-          onload: () => resolve(s),
-        }).connect(outputBus);
-      });
-      this.soundfontLoadedInstrument = instrument;
-      console.log(`[StudentAudioEngine] Soundfont for ${instrument} loaded successfully.`);
-    } catch (e) {
-      console.warn(`[StudentAudioEngine] Using PolySynth fallback for ${instrument}`, e);
-    }
-  }
-
   private partMix: Map<string, number> = new Map();
 
   /** Live per-part gain (0 = silent). Read at trigger time, so it applies during playback too. */
   setPartMix(mix: Record<string, number>) {
     this.partMix = new Map(Object.entries(mix));
+    this.refreshPartGains(Tone.now());
   }
 
-  private samplerByInstrument: Map<string, Tone.Sampler> = new Map();
-
-  /** Loads (once) a sampler for each instrument id so every part can sound like its own instrument. */
-  async preloadInstruments(instruments: string[]) {
+  async preloadInstruments(instruments: (string | { id: string; instrument: string; drum?: boolean })[]) {
     this.ensureInitialized();
-    const outputBus = this.hallReverb || this.backingVolume!;
-    const unique = Array.from(new Set(instruments.filter(Boolean)));
-    await Promise.all(unique.map(async (inst) => {
-      if (this.samplerByInstrument.has(inst)) return;
-      try {
-        const s = await loadOrchestralSampler(inst, outputBus);
-        if (s) { this.samplerByInstrument.set(inst, s); return; }
-      } catch { /* try legacy soundfont below */ }
-      try {
-        const data = await loadSoundfontScript('MusyngKite', inst);
-        const s = await new Promise<Tone.Sampler>((resolve) => {
-          const smp = new Tone.Sampler({ urls: data, onload: () => resolve(smp) }).connect(outputBus);
-        });
-        this.samplerByInstrument.set(inst, s);
-      } catch (e) {
-        console.warn('[StudentAudioEngine] No sampler for ' + inst + ', using default voice', e);
-      }
-    }));
+    const parts = new Map(instruments.map(value => typeof value === 'string'
+      ? [value, { id: value, instrument: value }] : [value.id, value]));
+    if (parts.size) await this.fluid.prepare([...parts.values()], this.hallReverb!);
+    this.refreshPartGains(Tone.now(), true);
   }
 
   private triggerNote(note: NoteEvent, noteName: string, duration: number, time: number, baseVelocity: number) {
-    const gain = note.partId !== undefined && this.partMix.has(note.partId) ? this.partMix.get(note.partId)! : 1;
-    if (gain <= 0) return;
-    const velocity = Math.max(0.05, Math.min(1, baseVelocity * gain));
-    const instrument = note.instrument;
-    const own = instrument ? this.samplerByInstrument.get(instrument) : undefined;
-    if (own && own.loaded) {
-      own.triggerAttackRelease(noteName, duration, time, velocity);
-    } else if (this.sampler && this.sampler.loaded) {
-      this.sampler.triggerAttackRelease(noteName, duration, time, velocity);
-    } else if (this.synth) {
-      this.synth.triggerAttackRelease(noteName, duration, time, velocity);
-    }
+    const id = note.partId ?? note.instrument ?? 'default';
+    if ((this.partMix.get(id) ?? 1) <= 0) return;
+    const velocity = Math.max(0, Math.min(1, baseVelocity));
+    if (velocity === 0) return;
+    if (this.percussion.play(note, time, duration, velocity)) return;
+    this.fluid.play(id + (note.percussion !== undefined ? ':gm-drums' : ''), note.pitch, velocity, time, duration);
   }
+
   private backingVolumePercent: number = 75;
 
   /** Reference MIDI master volume, 0-100 (75 = unity gain). */
@@ -239,7 +173,7 @@ export class StudentAudioEngine {
     if (this.backingVolume) {
       this.backingVolume.volume.value = this.backingVolumePercent <= 0
         ? -60
-        : Math.max(-60, 20 * Math.log10(this.backingVolumePercent / 75));
+        : Math.max(-60, -6 + 20 * Math.log10(this.backingVolumePercent / 75));
     }
   }
 
@@ -350,7 +284,14 @@ export class StudentAudioEngine {
     await Tone.start();
     if (generation !== this.playbackGeneration) return;
     this.ensureInitialized();
-    await this.preloadInstruments((config.notes || []).map(n => n.instrument ?? ''));
+    const parts = (config.notes || []).filter(note => !sampleFamily(note)).map(note => ({
+      id: (note.partId ?? note.instrument ?? 'default') + (note.percussion !== undefined ? ':gm-drums' : ''), instrument: note.percussion !== undefined ? 'piano' : note.instrument ?? 'trumpet', drum: note.percussion !== undefined,
+    }));
+    await Promise.all([
+      this.preloadInstruments(parts),
+      this.percussion.prepare(config.notes || [], id => this.partBus(id)),
+    ]);
+    this.balanceFrames = ensembleFrames(config.notes || []);
     if (generation !== this.playbackGeneration) return;
     this.activeConfig = config;
     this.intendedBpm = config.intendedBpm ?? config.bpm ?? 120;
@@ -372,6 +313,7 @@ export class StudentAudioEngine {
 
   /** Count-in and music share one transport; no browser timers determine audible beats. */
   private schedulePlayback(originScoreSeconds: number, count: number, shownOffset = 0, firstDelayPulses = 0) {
+    this.releaseBackingVoices();
     Tone.Transport.stop();
     Tone.Transport.cancel();
     Tone.Transport.position = 0;
@@ -413,11 +355,12 @@ export class StudentAudioEngine {
     if (position !== null) this.scheduleRemaining(position);
   }
   private scheduleRemaining(scoreSeconds: number) {
+    this.releaseBackingVoices();
     const beat = this.scoreBeat(scoreSeconds);
     if (beat >= this.sectionBounds().end - 1e-7) { this.finishPlayback(); return; }
     // Keep the transport running. Only replace future events, at the current score position.
-    const now = this.transportSeconds();
-    Tone.Transport.cancel(now);
+    const now = Tone.Transport.getSecondsAtTime(Tone.now()) + 0.01;
+    Tone.Transport.cancel(this.transportSeconds());
     const generation = ++this.playbackGeneration;
     this.transportOriginScoreSeconds = scoreSeconds;
     this.transportOriginRealSeconds = now;
@@ -443,12 +386,23 @@ export class StudentAudioEngine {
         }, time);
       }, at(click.beat));
     }
+    this.currentBalanceNotes = (config.notes || []).filter(n => n.beat <= fromBeat && n.beat + n.durationBeats > fromBeat);
+    this.refreshPartGains(Tone.now(), true);
+    for (const [beat, active] of this.balanceFrames) {
+      if (beat < fromBeat || beat >= endBeat) continue;
+      Tone.Transport.schedule(time => {
+        if (generation !== this.playbackGeneration) return;
+        this.currentBalanceNotes = active;
+        this.refreshPartGains(time);
+      }, at(beat));
+    }
     for (const note of config.notes || []) {
       if (note.measureNumber < config.startMeasure || note.measureNumber > config.endMeasure || note.beat < fromBeat - 1e-7 || note.beat >= endBeat) continue;
-      const duration = Math.max(0.04, (this.scoreSeconds(note.beat + note.durationBeats) - this.scoreSeconds(note.beat)) / this.speedMultiplier - 0.015);
+      const nominalDuration = (this.scoreSeconds(note.beat + note.durationBeats) - this.scoreSeconds(note.beat)) / this.speedMultiplier;
+      const { duration, attackScale } = articulatedGate(note, nominalDuration);
       Tone.Transport.schedule((time) => {
         if (generation !== this.playbackGeneration || this.isAudioBackingMuted) return;
-        this.triggerNote(note, Tone.Frequency(note.pitch, 'midi').toNote(), duration, time, note.velocity ?? 0.8);
+        this.triggerNote(note, Tone.Frequency(note.pitch, 'midi').toNote(), duration, time, (note.velocity ?? 0.8) * attackScale);
       }, at(note.beat));
     }
     Tone.Transport.schedule((time) => Tone.Draw.schedule(() => {
@@ -471,7 +425,7 @@ export class StudentAudioEngine {
   }
 
   private finishPlayback() {
-    this.stop();
+    this.stop(true);
     this.onEndCallback?.();
   }
 
@@ -492,12 +446,27 @@ export class StudentAudioEngine {
     }
   }
 
-  stop() {
+  private releaseBackingVoices() {
+    this.fluid.stop();
+    this.percussion.stop();
+  }
+
+  stop(preservePercussionTails = false) {
+    if (preservePercussionTails) this.fluid.stop(); else this.releaseBackingVoices();
     ++this.playbackGeneration;
     if (this.progressInterval) { clearInterval(this.progressInterval); this.progressInterval = null; }
     if (this.isPlaying) { Tone.Transport.stop(); Tone.Transport.cancel(); }
     this.isPlaying = false;
     this.countInActive = false;
+  }
+  dispose() {
+    this.stop(); this.fluid.dispose(); this.percussion.dispose();
+    this.metronomeSynth?.dispose(); this.metronomeSynth = null;
+    this.hallReverb?.dispose(); this.hallReverb = null;
+    this.backingVolume?.dispose(); this.backingVolume = null;
+    this.metronomeVolume?.dispose(); this.metronomeVolume = null;
+    this.outputLimiter?.dispose(); this.outputLimiter = null;
+    for (const bus of this.partBuses.values()) bus.dispose(); this.partBuses.clear();
   }
   getIsPlaying(): boolean { return this.isPlaying; }
 

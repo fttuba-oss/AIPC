@@ -1,9 +1,16 @@
+import { articulateNotes } from './noteArticulation';
+import { percussionKey } from './percussionPlayback';
+import { readPlaybackTranspositions, transpositionAt, writtenPitchToMidi } from './playbackTransposition';
 import { metronomeMarkQuarterBpm, type MetronomeMeasure } from './metronome';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 
 export interface NoteEvent {
   partId?: string;      // Score part this note belongs to (for the live part mix)
   instrument?: string;  // Soundfont instrument id used to voice this note (per-part sound)
+  percussionName?: string;
+  percussionRoll?: boolean;
+  percussionGrace?: boolean;
+  percussion?: number; // Zero-based GM drum key; never a melodic note.
   pitch: number;        // MIDI note number (e.g. 60 = C4)
   time: number;         // Start time in seconds from start
   duration: number;     // Duration in seconds
@@ -11,6 +18,8 @@ export interface NoteEvent {
   durationBeats: number;// Duration in beats
   measureNumber: number;// Measure index (1-based)
   velocity?: number;    // Dynamic velocity (0.0 to 1.0)
+  legatoToNext?: boolean;
+  legatoFromPrevious?: boolean;
   rawNote?: any;        // Temporary helper for merging consecutive tied/slurred notes
 }
 
@@ -55,8 +64,9 @@ export interface ScorePlaybackData {
  * Maps a parsed instrument name to a General MIDI soundfont name.
  */
 export function mapInstrumentToSoundfont(name: string): string {
-  const normalized = name.toLowerCase();
-  if (normalized.includes('flute') || normalized.includes('piccolo')) return 'flute';
+  const normalized = name.toLowerCase().replace(/\s+/g, ' ');
+  if (normalized.includes('piccolo')) return 'piccolo';
+  if (normalized.includes('flute')) return 'flute';
   if (normalized.includes('clarinet')) return 'clarinet';
   if (normalized.includes('oboe')) return 'oboe';
   if (normalized.includes('bassoon')) return 'bassoon';
@@ -67,7 +77,9 @@ export function mapInstrumentToSoundfont(name: string): string {
   if (normalized.includes('trumpet') || normalized.includes('cornet') || normalized.includes('soloist')) return 'trumpet';
   if (normalized.includes('horn') || normalized.includes('mellophone')) return 'french_horn';
   if (normalized.includes('trombone') || normalized.includes('euphonium') || normalized.includes('baritone')) return 'trombone';
+  if (normalized.includes('double bass') || normalized.includes('string bass')) return 'double_bass';
   if (normalized.includes('tuba') || normalized.includes('bass')) return 'tuba';
+  if (normalized.includes('tubular') || normalized.includes('chimes')) return 'tubular_bells';
   if (normalized.includes('glockenspiel') || normalized.includes('bell')) return 'glockenspiel';
   if (normalized.includes('xylophone')) return 'xylophone';
   if (normalized.includes('timpani')) return 'timpani';
@@ -78,7 +90,7 @@ export function mapInstrumentToSoundfont(name: string): string {
  * Fallback transposition mappings in semitones.
  */
 export function getFallbackTransposition(name: string): number {
-  const normalized = name.toLowerCase();
+  const normalized = name.toLowerCase().replace(/\s+/g, ' ');
   if (normalized.includes('baritone sax')) return -21;
   if (normalized.includes('tenor sax')) return -14;
   if (normalized.includes('alto sax')) return -9;
@@ -202,23 +214,6 @@ export function secondsToBeats(secs: number, tempos: TempoChange[]): number {
 }
 
 /**
- * Helper to determine if two OSMD notes are tied or slurred.
- */
-function areNotesTiedOrSlurredTogether(noteA: any, noteB: any): boolean {
-  if (!noteA || !noteB) return false;
-  if (noteA.NoteTie !== undefined) {
-    const notes = noteA.NoteTie.Notes || [];
-    if (notes.includes(noteB)) return true;
-  }
-  const slursA = noteA.slurs || [];
-  const slursB = noteB.slurs || [];
-  if (slursA.length > 0 && slursB.length > 0) {
-    return slursA.some((sA: any) => slursB.includes(sA));
-  }
-  return false;
-}
-
-/**
  * Parses the visual score and builds a timing-accurate representation for MIDI playback and tracker sync.
  */
 export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string | null): ScorePlaybackData {
@@ -262,6 +257,10 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
   });
 
   const measures = osmd.Sheet?.SourceMeasures || [];
+  const measureIndices = new Map(measures.map((measure, index) => [measure, index]));
+  const xmlDocument = rawXml ? new DOMParser().parseFromString(rawXml, 'application/xml') : null;
+  const playbackTranspositions = xmlDocument && !xmlDocument.querySelector('parsererror')
+    ? readPlaybackTranspositions(xmlDocument) : null;
   const getMeasureNumberForBeat = (beat: number): number => {
     let matchedNum = 1;
     for (const m of measures) {
@@ -346,15 +345,21 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
                 return;
               }
 
-              let pitch = note.Pitch?.getHalfTone();
-              if (pitch === undefined) return;
+              const percussion = percussionKey(note, instrument);
 
-              const transposition =
-                (instrument as any).playbackTranspose ||
-                (instrument as any).PlaybackTranspose ||
-                instrument.Transpose ||
-                getFallbackTransposition(instrument.Name || '');
-              pitch += transposition;
+              let pitch = note.Pitch?.getHalfTone();
+              if (pitch === undefined && percussion === undefined) return;
+
+              const sourceMeasure = note.SourceMeasure;
+              const measureIndex = measureIndices.get(sourceMeasure) ?? 0;
+              const staff = Math.max(1, instrument.Staves.indexOf(note.ParentStaff) + 1);
+              const offset = timestampInBeats - sourceMeasure.AbsoluteTimestamp.RealValue * 4;
+              // Explicit XML zero (or absent XML transpose) is concert pitch. Do not guess from a label.
+              // Instrument.Transpose is a notation setting, not a playback instruction.
+              const transposition = playbackTranspositions
+                ? transpositionAt(playbackTranspositions.get(partId) ?? [], measureIndex, offset, staff)
+                : (instrument.PlaybackTranspose ?? getFallbackTransposition(instrument.Name || ''));
+              pitch = percussion ?? writtenPitchToMidi(pitch!, transposition);
 
               const durationBeats = note.Length.RealValue * 4;
               const endBeat = timestampInBeats + durationBeats;
@@ -379,6 +384,10 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
 
               partData.notes.push({
                 pitch,
+                percussion,
+                percussionName: percussion !== undefined ? instrument.Name : undefined,
+                percussionRoll: percussion !== undefined && (note.TremoloStrokes > 0 || (note.TremoloInfo?.tremoloStrokes ?? 0) > 0),
+                percussionGrace: percussion !== undefined && (note.IsGraceNote || voiceEntry.IsGrace),
                 time: timeInSeconds,
                 duration: durationInSeconds,
                 beat: timestampInBeats,
@@ -398,39 +407,8 @@ export function parseScorePlayback(osmd: OpenSheetMusicDisplay, rawXml?: string 
 
   const parts = Array.from(partsMap.values());
 
-  // Merge consecutive tied/slurred notes of the same pitch
-  parts.forEach((part) => {
-    part.notes.sort((a, b) => a.time - b.time);
-
-    const originalNotes = part.notes;
-    const merged: NoteEvent[] = [];
-    let current: NoteEvent | null = null;
-
-    for (let i = 0; i < originalNotes.length; i++) {
-      const note = originalNotes[i];
-      if (!current) {
-        current = { ...note };
-        continue;
-      }
-
-      const samePitch = note.pitch === current.pitch;
-      const isAdjacent = Math.abs(note.time - (current.time + current.duration)) < 0.03;
-      const isConnected = samePitch && isAdjacent && areNotesTiedOrSlurredTogether(current.rawNote, note.rawNote);
-
-      if (isConnected) {
-        current.duration += note.duration;
-        current.durationBeats += note.durationBeats;
-      } else {
-        merged.push(current);
-        current = { ...note };
-      }
-    }
-    if (current) {
-      merged.push(current);
-    }
-
-    part.notes = merged.map(({ rawNote: _rn, ...rest }) => rest);
-  });
+  // Ties sustain one note; slurs retain each written attack with connected phrasing.
+  parts.forEach(part => { part.notes = articulateNotes(part.notes); });
 
   let maxTime = 0;
   parts.forEach((part) => {

@@ -171,9 +171,12 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
   // Audio & Metronome state: Solo Reference MIDI is ON by default matching mock-up
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
-  // Metronome subdivision state matching mock-up (eighth notes active)
-  const [subdivision, setSubdivision] = useState<MetronomeSubdivision>('eighth');
+  // Exercises start with crotchets; students can choose subdivisions afterwards.
+  const [subdivision, setSubdivision] = useState<MetronomeSubdivision>('quarter');
   const [isMinusOneActive, setIsMinusOneActive] = useState<boolean>(false);
+  const [automaticBalance, setAutomaticBalance] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [preparingAudio, setPreparingAudio] = useState(false);
   const [masterVolume, setMasterVolume] = useState<number>(75);
   const [isMixerCollapsed, setIsMixerCollapsed] = useState<boolean>(false);
 
@@ -263,7 +266,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       mix[t.id] = t.isMuted || ownSilenced ? 0 : Math.max(0, t.volume / 80);
     }
     audioEngineRef.current?.setPartMix(mix);
-  }, [tracks, myPartId, isMinusOneActive, playbackPhase]);
+    audioEngineRef.current?.setAutomaticBalance(automaticBalance);
+  }, [tracks, myPartId, isMinusOneActive, playbackPhase, automaticBalance]);
   const [countInNumber, setCountInNumber] = useState<number | null>(null);
   const [scorePlaybackData, setScorePlaybackData] = useState<ScorePlaybackData | null>(null);
 
@@ -478,7 +482,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     if (measures) setCoachTargetMeasures(measures);
     setIsCoachModalOpen(true);
   }, []);
-  const handleFinishPlaybackRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const handleFinishPlaybackRef = useRef<(naturalEnd?: boolean) => Promise<void>>(() => Promise.resolve());
   const liveParamsRef = useRef({
     scorePlaybackData,
     instrumentName,
@@ -556,8 +560,9 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     });
 
     engine.setOnEnd(() => {
-      handleFinishPlaybackRef.current();
+      handleFinishPlaybackRef.current(true);
     });
+    return () => engine.dispose();
   }, []);
 
   // Acoustic Mic Engine Callbacks
@@ -752,7 +757,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     audioEngineRef.current?.setAudioBackingMuted(isAudioMuted);
     audioEngineRef.current?.setMetronomeMuted(isMetronomeMuted);
 
-    await audioEngineRef.current?.startSectionPlayback(
+    setAudioError(null); setPreparingAudio(true);
+    try { await audioEngineRef.current?.startSectionPlayback(
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
@@ -770,6 +776,10 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       },
       effectiveBpm
     );
+    } catch (error) {
+      audioEngineRef.current?.stop(); setPlaybackPhase('idle');
+      setAudioError(error instanceof Error ? error.message : 'Could not prepare the instrument sounds.');
+    } finally { setPreparingAudio(false); }
 
     // The audio-clock tick callback changes phase after the count-in.
   };
@@ -827,7 +837,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     audioEngineRef.current?.setAudioBackingMuted(false);
     audioEngineRef.current?.setMetronomeMuted(isMetronomeMuted);
 
-    await audioEngineRef.current?.startSectionPlayback(
+    setAudioError(null); setPreparingAudio(true);
+    try { await audioEngineRef.current?.startSectionPlayback(
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
@@ -845,6 +856,10 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       },
       effectiveBpm
     );
+    } catch (error) {
+      audioEngineRef.current?.stop(); setPlaybackPhase('idle');
+      setAudioError(error instanceof Error ? error.message : 'Could not prepare the instrument sounds.');
+    } finally { setPreparingAudio(false); }
 
     // The audio-clock tick callback changes phase after the count-in.
   };
@@ -1036,7 +1051,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     audioEngineRef.current?.setAudioBackingMuted(isAudioMuted);
     audioEngineRef.current?.setMetronomeMuted(isMetronomeMuted);
 
-    await audioEngineRef.current?.startSectionPlayback(
+    setAudioError(null); setPreparingAudio(true);
+    try { await audioEngineRef.current?.startSectionPlayback(
       {
         intendedBpm: sectionTargetTempo,
         bpm: effectiveBpm,
@@ -1054,16 +1070,20 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       },
       effectiveBpm
     );
+    } catch (error) {
+      audioEngineRef.current?.stop(); setPlaybackPhase('idle');
+      setAudioError(error instanceof Error ? error.message : 'Could not prepare the instrument sounds.');
+    } finally { setPreparingAudio(false); }
 
     // The audio-clock tick callback changes phase after the count-in.
   };
 
   // 4. Stop Playback / Finish Take
-  const handleFinishPlayback = async () => {
+  const handleFinishPlayback = async (naturalEnd: boolean | React.MouseEvent = false) => {
     const wasInCountIn = playbackPhase === 'count_in' || playbackProgress < 0;
 
     playbackStartTimeRef.current = null;
-    audioEngineRef.current?.stop();
+    audioEngineRef.current?.stop(naturalEnd === true);
     setPlaybackPhase('idle');
     setCountInNumber(null);
     // FREEZE AT RESULTS: Do NOT reset playbackProgress to 0! Keep progress and notehead colors frozen on screen.
@@ -1495,6 +1515,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
             {/* Royal Blue Play/Pause */}
             <button
+              disabled={preparingAudio}
               onClick={playbackPhase !== 'idle' ? handleFinishPlayback : handleStartPractice}
               className="w-9 h-9 rounded-full bg-[#0071e3] hover:bg-blue-700 text-white flex items-center justify-center shadow-md shadow-blue-500/25 transition-transform active:scale-95 cursor-pointer"
               title={playbackPhase !== 'idle' ? 'Pause Practice' : 'Start Practice'}
@@ -1550,6 +1571,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
           />
         </header>
 
+        {preparingAudio && <div role="status" className="px-4 py-2 text-sm text-blue-800 bg-blue-50">Preparing instrument sounds… First playback may take a moment.</div>}
+        {audioError && <div role="alert" className="px-4 py-2 text-sm text-red-800 bg-red-50">{audioError}</div>}
         {/* Central Card: Score, Plan or Shared Recordings */}
         <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden bg-white/90 backdrop-blur-xs rounded-2xl border border-slate-200/80 shadow-xs">
           {activeNavTab === 'score' && (
@@ -1559,6 +1582,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
                 <StudentScoreViewer
                   xmlUrl={xmlUrl}
                   xmlContent={xmlContent}
+                  playbackStartBeat={startFromBeat}
                   startMeasure={activeMeasureRange[0]}
                   endMeasure={activeMeasureRange[1]}
                   sectionStartMeasure={currentSection ? currentSection.startMeasure : measureRange[0]}
@@ -1588,8 +1612,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
                     setIntendedBpm(secTempo);
                     setCurrentBpm(secTempo);
                     setTempoPreset('target');
-                    audioEngineRef.current?.preloadSoundfont(mapInstrumentToSoundfont(instrumentName));
-                    audioEngineRef.current?.preloadInstruments(data.parts.map(p => mapInstrumentToSoundfont(p.name)));
+                    // Instruments are loaded on Play, after the browser's audio gesture.
+                    setAudioError(null);
                   }}
                   onSeek={(targetSec, beat, measureNum) => {
                     setPlaybackProgress(targetSec);
@@ -1756,6 +1780,20 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       <div className="py-3 pr-3 shrink-0 h-full">
         <div className="h-full rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
           <EnsembleMixerPanel
+            onPlayAllParts={() => {
+              const allBandPartsOn = tracks.filter(track => track.id !== myPartId)
+                .every(track => !track.isMuted);
+              setTracks(prev => prev.map(track => ({
+                ...track, isMuted: allBandPartsOn && track.id !== myPartId,
+              })));
+              if (!allBandPartsOn) {
+                setAutomaticBalance(true);
+                setIsAudioMuted(false);
+                audioEngineRef.current?.setAudioBackingMuted(false);
+              }
+            }}
+            automaticBalance={automaticBalance}
+            onAutomaticBalanceChange={setAutomaticBalance}
             userInstrument={instrumentName}
                 parts={scoreParts.map(p => ({ id: p.id, name: p.name }))}
                 myPartId={myPartId}

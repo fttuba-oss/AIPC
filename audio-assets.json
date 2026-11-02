@@ -1,0 +1,186 @@
+{
+  "vsco": {
+    "commit": "440300901dfe9275fd84e0b7763af1f8443ae62e",
+    "baseUrl": "https://raw.githubusercontent.com/sgossner/VSCO-2-CE/440300901dfe9275fd84e0b7763af1f8443ae62e/Percussion/",
+    "families": {
+      "snare": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "Snare2-HitSN_v1_rr1_Sum.wav",
+            "Snare2-HitSN_v1_rr2_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "Snare2-HitSN_v5_rr1_Sum.wav",
+            "Snare2-HitSN_v5_rr2_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "Snare2-HitSN_v9_rr1_Sum.wav",
+            "Snare2-HitSN_v9_rr2_Sum.wav"
+          ]
+        }
+      ],
+      "bass-drum": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "BDrumNewhit_v1_rr1_Sum.wav",
+            "BDrumNewhit_v1_rr2_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "BDrumNewhit_v4_rr1_Sum.wav",
+            "BDrumNewhit_v4_rr2_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "BDrumNewhit_v7_rr1_Sum.wav",
+            "BDrumNewhit_v7_rr2_Sum.wav"
+          ]
+        }
+      ],
+      "crash": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "cymbal-crash1_pp_rr1.wav",
+            "cymbal-crash1_pp_rr2.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "cymbal-crash1_mf_rr1.wav",
+            "cymbal-crash1_mf_rr2.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "cymbal-crash1_ff_rr1.wav",
+            "cymbal-crash1_ff_rr2.wav"
+          ]
+        }
+      ],
+      "suspended-cymbal": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "susCymb1-hit_pp_rr1.wav",
+            "susCymb1-hit_pp_rr2.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "susCymb1-hit_mp_rr1.wav",
+            "susCymb1-hit_mp_rr2.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "susCymb1-hit_f_rr1.wav",
+            "susCymb1-hit_f_rr2.wav"
+          ]
+        }
+      ],
+      "tam-tam": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "gongHit_p.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "gongHit_mf.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "gongHit_fff.wav"
+          ]
+        }
+      ],
+      "snare-roll": [
+        {
+          "velocity": 0.25,
+          "files": [
+            "Snare2-rollSN_v1_rr1_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 0.6,
+          "files": [
+            "Snare2-rollSN_v3_rr1_Sum.wav"
+          ]
+        },
+        {
+          "velocity": 1,
+          "files": [
+            "Snare2-rollSN_v5_rr1_Sum.wav"
+          ]
+        }
+      ],
+      "suspended-roll": [
+        {
+          "velocity": 0.6,
+          "files": [
+            "susCymb1-cresc-Long_v1.wav"
+          ]
+        }
+      ]
+    },
+    "sha256": {
+      "Snare2-HitSN_v1_rr1_Sum.wav": "0eb05353ccf93fba34dfcbefa76a30a75b98e6c743a9fd049ad05697c5818ea1",
+      "Snare2-HitSN_v1_rr2_Sum.wav": "8ad82a198e2a535d4170d5f6b684b0e19a55416ffc07d039be89c7a0913f3e0c",
+      "Snare2-HitSN_v5_rr1_Sum.wav": "8deb654b739f6dfb01f192b7043a9aad92b7973995246252571240fe712d0876",
+      "Snare2-HitSN_v5_rr2_Sum.wav": "1f7ca9367273f7958cfccd5e454c0f30bb471301bc9ee05ef753c6f0423a3798",
+      "Snare2-HitSN_v9_rr1_Sum.wav": "af1e5609991b5a840c3b9affefa2c65fae98df518de770c05a1eec73dab118e1",
+      "Snare2-HitSN_v9_rr2_Sum.wav": "cd1a3ef5a8eb1dd30c77d118d906b1a01ccf86eb8b3cdb71c514b8cf3a09f7c5",
+      "BDrumNewhit_v1_rr1_Sum.wav": "dbd08796629b6987b64d03810b6d93f3a42dd7d05a15027b0af144bde46114fc",
+      "BDrumNewhit_v1_rr2_Sum.wav": "6f24fe2383879e396d1af52c47e2fa2e5a8dae97d8737d846d996985fde73eb8",
+      "BDrumNewhit_v4_rr1_Sum.wav": "7d8603e6802b51bc5acd3f73275f8e6408c7f2ccdd36d1a55b27e74034101589",
+      "BDrumNewhit_v4_rr2_Sum.wav": "ddc1495aed34b595ad91e30f7bda2e81a4e4e1e5aa69b5296a2f2587dc9e96e9",
+      "BDrumNewhit_v7_rr1_Sum.wav": "7024054e68261d2cca0ee58fdf9d6f23b54370792d04aa2c1ccf41acc090bd2b",
+      "BDrumNewhit_v7_rr2_Sum.wav": "fa4374b9ffdc3b9a3c85331ce96c447cf13e46d956cce9cfd9ba02801f71276f",
+      "cymbal-crash1_pp_rr1.wav": "4b4f1f76ba77877a67bb5969fde058dfd57cc455f92979d96b8e051419be1a3a",
+      "cymbal-crash1_pp_rr2.wav": "5a37ad2be0115b8f52989941026831ee0825273899e03419e3447536d7388ca3",
+      "cymbal-crash1_mf_rr1.wav": "3b4a6ed42627eedca39f6480e9825dedeaab538197fc734f85be13ba655aa6aa",
+      "cymbal-crash1_mf_rr2.wav": "88534fac7b69522738fa6ae39f305c424a26418c274a18ca5a08a1302e4c60a2",
+      "cymbal-crash1_ff_rr1.wav": "3b848fe459fcb398a78d77fe6c3f78e6b693bedeaeecbd029eeff6799452b98f",
+      "cymbal-crash1_ff_rr2.wav": "6f27c36fe2a829b667fd3372e1488437671534c0c719af9ae90128e5f99629d3",
+      "susCymb1-hit_pp_rr1.wav": "d3221ae2c34233b1fa8ceb011ac91d9d3064a57bacff158e41fdef780ad575f8",
+      "susCymb1-hit_pp_rr2.wav": "52a175eeb1058bbd5742d7d5bb42e5fa02cb124cb4606382ef781a66a8c0b74e",
+      "susCymb1-hit_mp_rr1.wav": "426238ad2bfadab07895c7b8f89204fed623d865693cc02d72c68627a86df75e",
+      "susCymb1-hit_mp_rr2.wav": "b368f5266e1ff9906c425e9d311a0c46bb211a24fff58fe251e608cfcc88814f",
+      "susCymb1-hit_f_rr1.wav": "42a8ece91eccec9b7063793e6644d037a9005c01d5b76f6bec358e8d53fb92a5",
+      "susCymb1-hit_f_rr2.wav": "0854260c65e14da1204f3dae4ea69517e3cccf13dfd65801691e662041f294f5",
+      "gongHit_p.wav": "3d103e1a7af12eeb17e0c5488f11933ca92b9fbdefa39b8020b64238da2db0d0",
+      "gongHit_mf.wav": "7e520ad14acda55db7906984f7efc2430961419435d951f55c8cdd9cd7a71108",
+      "gongHit_fff.wav": "998b27e21ee1639a73c1d71c8093e98cab4a10223640a59e8902ecfc557f74ac",
+      "Snare2-rollSN_v1_rr1_Sum.wav": "123e86756d9c17e3bc8537fdc4b0162378e3cf1abd990a86df3b433a43575ae8",
+      "Snare2-rollSN_v3_rr1_Sum.wav": "b2acd32aefadb20b9114daebaf5e2dc4bdbc1b98263d1dc217d9dfbb480bb01d",
+      "Snare2-rollSN_v5_rr1_Sum.wav": "44f7ea2e542b518b62b64c69ca542935c877dd90545f7cf2a95ba6d6ce7d5267",
+      "susCymb1-cresc-Long_v1.wav": "545ac0e20d235af9f6a54031ebdb9d82a27730bb7ca47ea192763a6aa8a4aa9b"
+    }
+  },
+  "fluidR3": {
+    "url": "https://deb.debian.org/debian/pool/main/f/fluid-soundfont/fluid-soundfont-gm_3.1-5.3_all.deb",
+    "sha256": "6f531493ac4e4d9772fd96b2488ea1790af81c196135fbdd25997da0781fc60e",
+    "soundfontSha256": "74594e8f4250680adf590507a306655a299935343583256f3b722c48a1bc1cb0"
+  }
+}
