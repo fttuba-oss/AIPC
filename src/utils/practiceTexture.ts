@@ -75,6 +75,24 @@ export function textureForScore(xml?: string | null): TextureSpan[] | null {
 export function textureAtMeasure(spans: TextureSpan[] | null, measure: number): TextureSpan | undefined {
   return spans?.find(s => measure >= s.start && measure <= s.end);
 }
+/** Extracted players inherit the source layer, with verified voice-specific exceptions. */
+export function expandTextureParts(spans: TextureSpan[] | null, parts: { sourceId: string; id: string; index: number }[]): TextureSpan[] | null {
+  if (!spans || !parts.length) return spans;
+  const expand = (ids: string[]) => ids.flatMap(id => {
+    const players = parts.filter(p => p.sourceId === id);
+    return players.length ? players.map(p => p.id) : [id];
+  });
+  return spans.flatMap(span => {
+    const result = { ...span, melody: expand(span.melody), countermelody: expand(span.countermelody), accompaniment: expand(span.accompaniment) };
+    // Sunny Island flute 2's repeated D5 half notes support flute 1's melody at 41–43.
+    const lowerFlute = parts.find(p => p.sourceId === 'P2' && p.index === 1);
+    if (lowerFlute && span.start === 41 && span.end === 44) {
+      return [{ ...result, end: 43, melody: result.melody.filter(id => id !== lowerFlute.id), accompaniment: [...result.accompaniment, lowerFlute.id] },
+        { ...result, start: 44, label: 'C · closing response' }];
+    }
+    return result;
+  });
+}
 /** Keep saved choices, but suspend a line whenever the student carries it. */
 export function availablePracticeRoles(roles: TextureRole[], span: TextureSpan | undefined, ownPart: string | null): TextureRole[] {
   return roles.filter(role => !ownPart || !span?.[role].includes(ownPart));

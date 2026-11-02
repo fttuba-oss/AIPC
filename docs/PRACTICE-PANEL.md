@@ -32,6 +32,18 @@ Selecting audio does not automatically add staves or re-engrave the score. Stude
 
 `scoreDisplay.ts` creates a display-only MusicXML copy. Explicit articulation/slur placement is preserved. Where absent, standard short articulations and slurs use a consistent above placement for a single voice, and above/below placement for upper/lower independent voices on the same staff. Explicit slur orientation is respected; ties and specialist breath/technique marks keep their normal engraving rules. OSMD's slur obstacle handling is enabled. Original MusicXML, playback articulations and analysis fingerprint are unchanged. This is a display convention, not a guarantee that every dense or cross-staff engraving needs no manual review.
 
+## Separate players from combined parts
+
+`splitScoreParts.ts` makes an in-memory practice-score copy for explicitly named pairs of single-staff wind/brass players. Sunny Island's combined flutes and two horn pairs become **Flute 1**, **Flute 2**, and **Horns 1–4**: 34 individually selectable parts in total. The uploaded score remains unchanged.
+
+Independent voices retain their own rhythm. In shared-voice passages, upper/lower chord tones go to the first/second player; a single shared line goes to both. A later independent voice can enter after a shared chord passage within the same measure. Missing space is filled with rests. Shared articulations/slurs are retained on extracted chord tones. Dynamics, timed directions and transpositions are copied with their musical locations intact; generated instrument IDs are independent.
+
+Extraction does not silently delete surplus chord tones. Flute bar 8 contains a two-note chord in the upper explicit voice plus a simultaneous lower voice: three pitches for two named players. Those notes remain in the upper/lower extracted voices, and the flute controls show a source-review notice. Resolving that source ambiguity requires a musical decision, not dropping a pitch automatically.
+
+Supported names explicitly identify two numbered flute/horn/clarinet/trumpet/trombone/oboe/bassoon players. Grand staves, more than two voices, ordinary chordal instruments and solo/player-only instructions are not automatically split. Shared single-line material assumes both players participate; this is not a general conductor-score part-extraction engine.
+
+Role annotations expand to the independent IDs. Verified Sunny Island flute 2 support at 41–43 is labelled accompaniment, with its return to the melodic layer at 44. Other extracted players inherit the analysed source layer pending any further voice-specific review. The tracker uses the newly engraved individual staff and retains the selected musical position during part changes.
+
 ## Checks
 
 `npm test` includes score binding, thematic handoffs, fixed-instrument behaviour, independent own-reference selection and annotation coverage. Run `npm run build` for type checking and the production build. Browser checks should cover radio/checkbox controls, whole-band on/off, previews, seeking across E/F/H, and unsupported-score messaging.

@@ -42,6 +42,7 @@ interface EnsembleMixerPanelProps {
   canPreview: boolean;
   activeTexturePartIds: string[];
   ownPartResting: boolean;
+  extractionReviewBars: number[];
 }
 const roles: TextureRole[] = ['melody', 'countermelody', 'accompaniment'];
 const accompanimentFamily = (name: string): string => {
@@ -73,6 +74,10 @@ export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
           {p.parts.map(part => <option key={part.id} value={part.id}>{part.name}</option>)}
         </select> : <p>{ownName}</p>}
       </div>
+      {p.extractionReviewBars.length > 0 && <details className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">
+        <summary className="cursor-pointer font-medium">Source notation needs review</summary>
+        <p className="mt-2">Bars {p.extractionReviewBars.join(', ')} contain extra chord tones within a player’s line. The original notes have been preserved.</p>
+      </details>}
       <label className="flex items-start gap-3 cursor-pointer border-b border-slate-100 pb-4">
         <input aria-label="Hear my part" type="checkbox" className="mt-1 accent-blue-600" checked={!p.isMinusOneActive} onChange={e => p.onToggleMinusOne(!e.target.checked)} />
         <span><span className="font-semibold text-sm">Hear my part</span><span className="block text-xs text-slate-500 mt-1">Turn off to play it yourself.</span></span>

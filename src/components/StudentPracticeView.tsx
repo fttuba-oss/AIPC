@@ -16,7 +16,8 @@ import { EnsembleMixerPanel, type InstrumentTrack } from '../student/components/
 import { StudentAcousticInput } from '../utils/studentAcousticInput';
 import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartAndNotes, type ScorePlaybackData, type NoteEvent } from '../utils/scorePlaybackParser';
 import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
-import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
+import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
+import { splitCombinedScore } from '../utils/splitScoreParts';
 import {
   MediaRecordingEngine,
   getOrCreateActiveSession,
@@ -180,7 +181,9 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [automaticBalance, setAutomaticBalance] = useState(false);
   const [practiceMode, setPracticeMode] = useState<PracticeMode>('own');
   const [selectedRoles, setSelectedRoles] = useState<TextureRole[]>(['melody']);
-  const textureSpans = useMemo(() => textureForScore(xmlContent), [xmlContent]);
+  const splitScore = useMemo(() => splitCombinedScore(xmlContent), [xmlContent]);
+  const practiceXmlContent = splitScore.xml;
+  const textureSpans = useMemo(() => expandTextureParts(textureForScore(xmlContent), splitScore.parts), [xmlContent, splitScore]);
   const [previewRole, setPreviewRole] = useState<TextureRole | null>(null);
   const previewEngineRef = useRef<StudentAudioEngine | null>(null);
   const stopPreview = useCallback(() => {
@@ -199,7 +202,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [isMixerCollapsed, setIsMixerCollapsed] = useState<boolean>(false);
 
   // ---- Parts of THIS score: which part I'm practising, and which parts I practise with ----
-  const scoreParts = useMemo(() => listScoreParts(xmlContent), [xmlContent]);
+  const scoreParts = useMemo(() => listScoreParts(practiceXmlContent), [practiceXmlContent]);
   const [myPartId, setMyPartId] = useState<string | null>(null);
   const myPartIdRef = useRef<string | null>(null);
   myPartIdRef.current = myPartId;
@@ -1560,7 +1563,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               {(pieceTitle || 'Beautiful Danxia').replace(/\s+for\s+Concert\s+Band/i, '')}
             </h2>
             <p className="text-[14px] text-slate-700 font-medium mt-0.5">
-              {instrumentName || 'Flute 2'}
+              {myPartName || 'Flute 2'}
             </p>
           </div>
 
@@ -1692,7 +1695,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               <div className="flex-1 overflow-auto min-h-0 relative">
                 <StudentScoreViewer
                   xmlUrl={xmlUrl}
-                  xmlContent={xmlContent}
+                  xmlContent={practiceXmlContent}
                   playbackStartBeat={startFromBeat}
                   startMeasure={activeMeasureRange[0]}
                   endMeasure={activeMeasureRange[1]}
@@ -1898,6 +1901,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
             texture={currentTexture}
             textureSections={textureSpans || []}
             roleSegments={roleSegments}
+            extractionReviewBars={splitScore.parts.find(part => part.id === myPartId)?.reviewBars || []}
             onSectionSeek={(measure) => {
               if (!scorePlaybackData) return;
               stopPreview();
@@ -2031,7 +2035,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       <AipcStrategyCoachModal
         isOpen={isCoachModalOpen}
         onClose={() => setIsCoachModalOpen(false)}
-        xmlContent={xmlContent ?? null}
+        xmlContent={practiceXmlContent ?? null}
         pieceTitle={pieceTitle}
         measureRange={coachTargetMeasures}
         tempoBpm={currentBpm || intendedBpm || 112}
