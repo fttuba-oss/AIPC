@@ -1,3 +1,4 @@
+import { prepareScoreForDisplay } from '../utils/scoreDisplay';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { trackerPositionAt, type TrackerAnchor } from '../utils/scoreTracker';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
@@ -94,30 +95,41 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     onViewModeChange?.(mode);
   };
 
-  const cursorBeatRef = useRef<number>(-1);
   const cachedNotesRef = useRef<any[]>([]);
   const trackerAnchorsRef = useRef<TrackerAnchor[]>([]);
   const playbackRef = useRef({ playbackProgress, getPlaybackTime });
   playbackRef.current = { playbackProgress, getPlaybackTime };
   const lastTrackerSystemRef = useRef<number | null>(null);
+  const viewStateRef = useRef({ scoreData, startMeasure, playbackStartBeat, isPlaying });
+  viewStateRef.current = { scoreData, startMeasure, playbackStartBeat, isPlaying };
+  const trackerBeat = useCallback(() => {
+    const view = viewStateRef.current;
+    const clock = playbackRef.current;
+    if (!view.isPlaying) return view.playbackStartBeat ?? secondsToBeats(Math.max(0, clock.playbackProgress), view.scoreData?.tempos || []);
+    const seconds = clock.getPlaybackTime?.() ?? clock.playbackProgress;
+    return seconds < 0 ? view.playbackStartBeat ?? view.scoreData?.measureStartBeatByNumber?.[view.startMeasure] ?? 0
+      : secondsToBeats(seconds, view.scoreData?.tempos || []);
+  }, []);
 
-  const drawTracker = useCallback((beat: number, follow = false) => {
+  const drawTracker = useCallback((beat: number, follow = false, immediate = false) => {
     const el = customCursorRef.current;
     const position = trackerPositionAt(trackerAnchorsRef.current, beat);
     if (!el || !position) return;
     el.style.display = 'block';
     el.style.transform = `translate3d(${position.x}px, ${position.top}px, 0)`;
     el.style.height = `${position.height}px`;
-    if (follow && lastTrackerSystemRef.current !== position.system && wrapperRef.current) {
+    if (follow && (immediate || lastTrackerSystemRef.current !== position.system) && wrapperRef.current) {
       // Scroll only when entering a system; never restart a smooth scroll every frame.
       let viewport = wrapperRef.current.parentElement;
       while (viewport && !/(auto|scroll)/.test(getComputedStyle(viewport).overflowY)) viewport = viewport.parentElement;
       if (viewport) {
+        // A seek or new layout supersedes any smooth follow already in flight.
+        if (immediate) viewport.scrollTo({ top: viewport.scrollTop, behavior: 'instant' });
         const y = wrapperRef.current.getBoundingClientRect().top + position.top;
         const box = viewport.getBoundingClientRect();
         if (y < box.top + 16 || y + position.height > box.bottom - 24) {
           viewport.scrollTo({ top: viewport.scrollTop + y - box.top - 48,
-            behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+            behavior: immediate || matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
         }
       }
     }
@@ -205,21 +217,10 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       }
     });
     trackerAnchorsRef.current = anchors.sort((a, b) => a.beat - b.beat);
-    const data = playbackRef.current;
-    const seconds = data.getPlaybackTime?.() ?? data.playbackProgress;
-    drawTracker(seconds < 0
-      ? (playbackStartBeat ?? scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
-      : secondsToBeats(seconds, scoreData?.tempos || []));
-  }, [drawTracker, scoreData, startMeasure, playbackStartBeat]);
-
-  // Retain click/seek integration without showing OSMD's separate cursor.
-  const positionCustomCursor = useCallback((osmd: OpenSheetMusicDisplay, isIdle = false) => {
-    osmd.cursor?.hide();
-    const beat = isIdle
-      ? (playbackStartBeat ?? scoreData?.measureStartBeatByNumber?.[startMeasure] ?? scoreData?.measureStartBeats[startMeasure - 1] ?? 0)
-      : ((osmd.cursor?.Iterator.CurrentSourceTimestamp?.RealValue ?? 0) * 4);
-    drawTracker(beat);
-  }, [drawTracker, scoreData, startMeasure, playbackStartBeat]);
+    // Geometry changed: restore the same musical position using the new layout.
+    lastTrackerSystemRef.current = null;
+    drawTracker(trackerBeat(), true, true);
+  }, [drawTracker, trackerBeat]);
 
   /**
    * Cache rendered graphical note references filtered to the active measure range.
@@ -257,40 +258,12 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     cachedNotesRef.current = playableNotes;
   }, [startMeasure, endMeasure, activeViewMode]);
 
-  /**
-   * Move cursor to the start of the targeted section
-   */
-  const pointCursorToSectionStart = useCallback((osmd: OpenSheetMusicDisplay, currentScoreData: ScorePlaybackData | null, targetMeasureOverride?: number) => {
-    if (!osmd.cursor) return;
-    osmd.cursor.hide();
-    osmd.cursor.reset();
-
-    const isFull = activeViewMode === 'full';
-    const isFocus = activeViewMode === 'focus' || isCoachModeActive;
-
-    const targetM = targetMeasureOverride ?? startMeasure;
-
-    let safety = 0;
-    while (safety < 50000 && !osmd.cursor.Iterator.EndReached) {
-      const curM = osmd.cursor.Iterator.CurrentMeasure?.MeasureNumber;
-      if (curM !== undefined && curM >= targetM) {
-        break;
-      }
-      osmd.cursor.next();
-      safety++;
-    }
-    cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-    osmd.cursor.update();
-    positionCustomCursor(osmd, true);
-  }, [startMeasure, positionCustomCursor]);
-
   // 1. Initialize and render OSMD
   useEffect(() => {
     if (!containerRef.current) return;
 
     let isMounted = true;
     containerRef.current.innerHTML = '';
-    cursorBeatRef.current = -1;
     if (customCursorRef.current) {
       customCursorRef.current.style.display = 'none';
     }
@@ -320,6 +293,10 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = false;
     osmd.EngravingRules.NewSystemAtXMLNewPageAttribute = false;
     osmd.EngravingRules.StretchLastSystemLine = false;
+    osmd.EngravingRules.ArticulationPlacementFromXML = true;
+    osmd.EngravingRules.SlurPlacementFromXML = true;
+    osmd.EngravingRules.SlurPlacementUseSkyBottomLine = true;
+    osmd.EngravingRules.SlurFlattenToObstacle = true;
     osmd.EngravingRules.PageTopMargin = 0;
     (window as any).osmd = osmd;
     osmd.EngravingRules.PageBottomMargin = 0;
@@ -352,7 +329,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     loadXml()
       .then(async (xmlText) => {
         if (!isMounted) return;
-        await osmd.load(xmlText.replace(/&amp;amp;/g, '&amp;'));
+        await osmd.load(prepareScoreForDisplay(xmlText.replace(/&amp;amp;/g, '&amp;')));
+        if (!isMounted) return;
         osmd.zoom = zoom;
         applyVisibleParts(osmd, visiblePartsRef.current);
 
@@ -404,15 +382,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
           osmd.render();
         }
 
-        // Initialize cursor and point directly to target bars
-        if (osmd.cursor) {
-          setTimeout(() => {
-            if (osmdRef.current) {
-              pointCursorToSectionStart(osmdRef.current, parsed, startMeasure);
-            }
-          }, 150);
-        }
-
+        // Only the custom tracker controls position and scrolling.
+        osmd.cursor?.hide();
         refreshCachedNoteheads();
         setIsLoaded(true);
         setErrorMsg(null);
@@ -489,11 +460,11 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     try {
       osmd.render();
       refreshCachedNoteheads();
-      pointCursorToSectionStart(osmd, scoreData, startMeasure);
+      osmd.cursor?.hide();
     } catch (e) {
       console.warn('[StudentScoreViewer] Re-render error on section update:', e);
     }
-  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads, pointCursorToSectionStart, scoreData]);
+  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads]);
 
   // 3. Zoom updates
   useEffect(() => {
@@ -501,11 +472,9 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       osmdRef.current.zoom = zoom;
       osmdRef.current.render();
       refreshCachedNoteheads();
-      if (osmdRef.current.cursor) {
-        positionCustomCursor(osmdRef.current);
-      }
+      osmdRef.current.cursor?.hide();
     }
-  }, [zoom, isLoaded, refreshCachedNoteheads, positionCustomCursor]);
+  }, [zoom, isLoaded, refreshCachedNoteheads]);
 
   // Rebuild cached coordinates after notation, zoom, visibility or container-size changes.
   useEffect(() => {
@@ -542,8 +511,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
 
   // Idle seeks and a stopped transport should update immediately and remain motionless.
   useEffect(() => {
-    if (!isPlaying && scoreData) drawTracker(secondsToBeats(Math.max(0, playbackProgress), scoreData.tempos));
-  }, [playbackProgress, isPlaying, scoreData, drawTracker]);
+    if (!isPlaying && scoreData) drawTracker(trackerBeat(), true, true);
+  }, [playbackProgress, playbackStartBeat, isPlaying, scoreData, drawTracker, trackerBeat]);
 
   /**
    * Click handler on sheet music to jump playhead
@@ -709,20 +678,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       const targetSeconds = beatToSeconds(clickedMeasureBeat, scoreData.tempos);
       onSeek(targetSeconds, clickedMeasureBeat, clickedMeasureNumber);
 
-      // Immediately step cursor to clicked measure
-      osmd.cursor.reset();
-      let safety = 0;
-      while (safety < 50000 && !osmd.cursor.Iterator.EndReached) {
-        const currentBeat = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-        if (currentBeat >= clickedMeasureBeat - 0.01) {
-          break;
-        }
-        osmd.cursor.next();
-        safety++;
-      }
-      cursorBeatRef.current = (osmd.cursor.Iterator.CurrentSourceTimestamp?.RealValue ?? (osmd.cursor.Iterator as any).currentTimeStamp?.RealValue ?? 0) * 4;
-      osmd.cursor.update();
-      drawTracker(clickedMeasureBeat, true);
+      // Do not reset/update OSMD's hidden cursor: it can scroll to another system.
+      drawTracker(clickedMeasureBeat, true, true);
     }
   };
 
@@ -762,7 +719,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       )}
 
       {/* Sheet Music Canvas Area */}
-      <div className="flex-1 overflow-auto px-2 py-1 flex flex-col items-center justify-start min-h-[300px] bg-[#fdfcf9]">
+      <div data-score-viewport style={{ overflowAnchor: 'none', scrollBehavior: 'auto' }} className="flex-1 overflow-auto px-2 py-1 flex flex-col items-center justify-start min-h-[300px] bg-[#fdfcf9]">
         {errorMsg && (
           <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs max-w-md text-center my-auto">
             {errorMsg}

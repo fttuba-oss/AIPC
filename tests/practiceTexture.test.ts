@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { selectedPracticePart, sunnyIslandTexture, textureAtMeasure, textureForScore } from '../src/utils/practiceTexture.ts';
+import { partRoleSegments, selectedPracticePart, sunnyIslandTexture, textureAtMeasure, textureForScore } from '../src/utils/practiceTexture.ts';
 import { matchPartToInstrument, type ScorePartInfo } from '../src/utils/scoreParts.ts';
 
 test('the student tenor/baritone sax part is not mistaken for the first alto sax', () => {
@@ -61,4 +61,15 @@ test('annotation spans cover every written bar once and never duplicate a part a
     assert.equal(new Set(all).size, 31);
   }
   assert.equal(textureAtMeasure(sunnyIslandTexture, 117), undefined);
+});
+
+test('role maps merge adjacent equivalent phrases, distinguish rests, and retain the next role', () => {
+  const active = new Set(Array.from({ length: 116 }, (_, i) => i + 1));
+  active.delete(1);
+  const map = partRoleSegments(sunnyIslandTexture, 'P2', active);
+  assert.deepEqual(map[0], { start: 1, end: 1, role: 'rest', label: 'Resting' });
+  assert.deepEqual(map.find(s => s.start === 6), { start: 6, end: 10, role: 'melody', label: 'Melody' });
+  assert.deepEqual(map.find(s => s.start === 20), { start: 20, end: 28, role: 'melody', label: 'Melody' });
+  assert.equal(map.find(s => s.start === 29)?.role, 'accompaniment');
+  assert.deepEqual(partRoleSegments(null, 'P2'), []);
 });
