@@ -3,6 +3,7 @@ import type { StoredExercise, StudentProfile, MusicalSection, PracticeArea } fro
 import { StudentExerciseInbox } from './components/StudentExerciseInbox';
 import { StudentPracticeView } from '../components/StudentPracticeView';
 import { unpackMusicXml, parseMusicXmlToScore } from '../utils/scoreParser';
+import { StudentTrial } from './StudentTrial';
 
 export const StudentApp: React.FC = () => {
   const [selectedStudent, setSelectedStudent] = useState<StudentProfile>({
@@ -130,4 +131,4 @@ export const StudentApp: React.FC = () => {
   );
 };
 
-export default StudentApp;
+export default import.meta.env.VITE_STUDENT_TRIAL === 'true' ? StudentTrial : StudentApp;

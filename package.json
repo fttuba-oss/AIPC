@@ -8,6 +8,7 @@
     "dev:teacher": "vite --port 5174",
     "dev:student": "vite --port 5175",
     "build": "tsc -b && vite build",
+    "build:student-trial": "node scripts/build-student-trial.mjs",
     "test": "tsx --test tests/**/*.test.ts tests/*.test.ts",
     "lint": "oxlint",
     "preview": "vite preview",

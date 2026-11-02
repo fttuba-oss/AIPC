@@ -46,6 +46,7 @@ interface StudentPracticeViewProps {
   exerciseId?: string;
   studentId?: string;
   studentName?: string;
+  trialMode?: boolean;
 }
 
 export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
@@ -64,6 +65,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   exerciseId,
   studentId,
   studentName,
+  trialMode = false,
 }) => {
   // ------------------------------------------------------------------
   // Section Navigation & Practice Agenda State
@@ -1423,6 +1425,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
 
   // Submit take to teacher & shared studio storage
   const handleSubmitTake = async () => {
+    if (trialMode) return;
     submitSectionToTeacher(session.sessionId, sectionId);
     setIsSubmitted(true);
     setShowTakeModal(false);
@@ -1562,7 +1565,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               <span>Score</span>
             </button>
 
-            <button
+            {!trialMode && <button
               onClick={() => setActiveNavTab('plan')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold transition-all cursor-pointer ${
                 activeNavTab === 'plan'
@@ -1572,7 +1575,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
             >
               <Calendar className="w-4.5 h-4.5 text-slate-500" />
               <span>Practice plan</span>
-            </button>
+            </button>}
 
             <button
               onClick={() => setActiveNavTab('recordings')}
@@ -1583,11 +1586,12 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               }`}
             >
               <Users className="w-4.5 h-4.5 text-slate-500" />
-              <span>Shared recordings</span>
+              <span>{trialMode ? 'My recording' : 'Shared recordings'}</span>
             </button>
           </nav>
         </div>
 
+        {trialMode && <p className="mt-5 text-xs leading-relaxed text-slate-500">Sunny Island trial<br />Choose your part in “Practise with”. Recordings stay in this browser; teacher submissions are unavailable.<br /><a className="text-blue-600 underline" href={`${import.meta.env.BASE_URL}audio/vendor/licenses/`} target="_blank" rel="noreferrer">Audio credits</a></p>}
       </aside>
 
       {/* ------------------------------------------------------------------ */}
@@ -1802,8 +1806,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               <div className="max-w-2xl mx-auto bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div>
-                    <h3 className="font-bold text-base text-slate-900">Shared Recordings & Studio Submissions</h3>
-                    <p className="text-xs text-slate-500">Access your recorded practice takes and teacher feedback</p>
+                    <h3 className="font-bold text-base text-slate-900">{trialMode ? 'My recording' : 'Shared Recordings & Studio Submissions'}</h3>
+                    <p className="text-xs text-slate-500">{trialMode ? 'Listen back to your local trial recording' : 'Access your recorded practice takes and teacher feedback'}</p>
                   </div>
                   <button
                     onClick={() => setActiveNavTab('score')}
@@ -1825,7 +1829,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
                           <p className="text-sm text-slate-500">{new Date(recentTake.timestamp).toLocaleTimeString()} • {recentTake.durationSeconds}s • {recentTake.mode.toUpperCase()}</p>
                         </div>
                       </div>
-                      {isSubmitted ? (
+                      {trialMode ? <span className="text-xs text-slate-500">Local recording</span> : isSubmitted ? (
                         <span className="flex items-center gap-1 text-sm font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
                           <CheckCircle2 className="w-3.5 h-3.5" /> Submitted
                         </span>
@@ -1849,7 +1853,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
                     </div>
                     <p className="text-sm font-semibold text-slate-700">No recordings saved yet</p>
                     <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                      Press "Record practice" beneath the score to record an audio or video take. Your submitted takes will appear here.
+                      Press “Record practice” beneath the score to record a take and listen back here.
                     </p>
                     <button
                       onClick={() => {
@@ -1989,13 +1993,13 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
                 Practice Again
               </button>
 
-              <button
+              {!trialMode && <button
                 onClick={handleSubmitTake}
                 className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-md transition-all active:scale-95"
               >
                 <Send className="w-4 h-4" />
                 <span>Submit Take to Teacher</span>
-              </button>
+              </button>}
             </div>
           </div>
         </div>

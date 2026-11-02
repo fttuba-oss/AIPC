@@ -7,6 +7,11 @@ import path from 'node:path';
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: process.env.AIPC_STUDENT_TRIAL === 'true' ? './' : '/',
+  publicDir: process.env.AIPC_STUDENT_TRIAL === 'true' ? false : 'public',
+  define: {
+    'import.meta.env.VITE_STUDENT_TRIAL': JSON.stringify(process.env.AIPC_STUDENT_TRIAL === 'true' ? 'true' : 'false'),
+  },
   plugins: [
     react(),
     tailwindcss(),
@@ -26,7 +31,9 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      input: {
+      input: process.env.AIPC_STUDENT_TRIAL === 'true' ? {
+        student: path.resolve(__dirname, 'student.html'),
+      } : {
         main: path.resolve(__dirname, 'index.html'),
         student: path.resolve(__dirname, 'student.html'),
       },

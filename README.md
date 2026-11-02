@@ -137,3 +137,5 @@ See [Integrated practice playback](docs/AUDIO.md) for FluidR3/FluidSynth, VSCO o
 See [Musical reasoning](docs/musical-reasoning/README.md) for reusable texture-analysis principles, the Sunny Island worked example, a template for new pieces and a record of revisions. Read this library before extending the musical analysis to new repertoire.
 
 See [Student practice panel](docs/PRACTICE-PANEL.md) for own-part, musical-line and instrument accompaniment controls, including the current annotation scope.
+
+For the standalone Sunny Island student trial and GitHub Pages publishing instructions, see [Public student trial](docs/STUDENT-TRIAL.md). Build it with `npm run build:student-trial`.
