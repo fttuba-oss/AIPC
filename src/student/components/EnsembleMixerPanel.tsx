@@ -1,25 +1,18 @@
 import React, { useState } from 'react';
-import { 
-  Volume2, VolumeX, Eye, EyeOff, ChevronDown, ChevronUp, 
-  Music, Sliders, Headphones 
-} from 'lucide-react';
+import { Volume2, Eye, EyeOff, ChevronDown, ChevronUp } from 'lucide-react';
+import type { PracticeMode, TextureRole, TextureSpan } from '../../utils/practiceTexture';
 
 export interface InstrumentTrack {
-  id: string;
-  name: string;
+  id: string; name: string;
   section: 'Woodwinds' | 'Saxophones' | 'Brass' | 'Percussion' | 'Other';
-  volume: number; // 0 to 100
-  isMuted: boolean;
-  isVisible: boolean; // whether rendered in sheet music
-  isUserPart?: boolean;
+  volume: number; isMuted: boolean; isVisible: boolean; isUserPart?: boolean;
 }
-
 interface EnsembleMixerPanelProps {
   onPlayAllParts: () => void;
+  onClearParts: () => void;
   automaticBalance: boolean;
   onAutomaticBalanceChange: (enabled: boolean) => void;
-  userInstrument: string; // e.g. 'Flute 2'
-  /** Parts of this score, for the 'I'm practising' picker. */
+  userInstrument: string;
   parts?: { id: string; name: string }[];
   myPartId?: string | null;
   onMyPartChange?: (id: string) => void;
@@ -33,216 +26,102 @@ interface EnsembleMixerPanelProps {
   onToggleMinusOne: (active: boolean) => void;
   masterVolume: number;
   onMasterVolumeChange: (volume: number) => void;
+  mode: PracticeMode;
+  onModeChange: (mode: PracticeMode) => void;
+  selectedRoles: TextureRole[];
+  onRoleToggle: (role: TextureRole) => void;
+  texture?: TextureSpan;
+  hasTexture: boolean;
+  measure: number;
+  onPreview: (role: TextureRole) => void;
+  previewRole: TextureRole | null;
+  canPreview: boolean;
+  activeTexturePartIds: string[];
+  ownPartResting: boolean;
 }
+const roles: TextureRole[] = ['melody', 'countermelody', 'accompaniment'];
+const accompanimentFamily = (name: string): string => {
+  if (/bassoon|bass clarinet|baritone sax|tuba|string bass/i.test(name)) return 'Bass instruments';
+  if (/horn/i.test(name)) return 'Horns';
+  if (/trombone/i.test(name)) return 'Trombones';
+  if (/trumpet/i.test(name)) return 'Trumpets';
+  if (/clarinet/i.test(name)) return 'Clarinets';
+  if (/sax/i.test(name)) return 'Saxophones';
+  return name;
+};
+const roleName = (role: TextureRole, texture?: TextureSpan) => role === 'melody' ? 'Melody'
+  : role === 'accompaniment' ? 'Accompaniment' : texture?.secondaryLabel || 'Countermelody';
 
-export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = ({
-  onPlayAllParts,
-  automaticBalance,
-  onAutomaticBalanceChange,
-  userInstrument,
-  parts = [],
-  myPartId = null,
-  onMyPartChange,
-  tracks,
-  onTrackVolumeChange,
-  onTrackMuteToggle,
-  onTrackVisibilityToggle,
-  isReferenceMidiActive,
-  onToggleReferenceMidi,
-  isMinusOneActive,
-  onToggleMinusOne,
-  masterVolume,
-  onMasterVolumeChange,
-}) => {
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
-    Woodwinds: false,
-    Saxophones: true,
-    Brass: true,
-    Percussion: true,
-    Other: true,
-  });
-
-  const toggleSection = (sec: string) => {
-    setCollapsedSections(prev => ({ ...prev, [sec]: !prev[sec] }));
-  };
-
-  const sections: ('Woodwinds' | 'Saxophones' | 'Brass' | 'Percussion' | 'Other')[] = [
-    'Woodwinds', 'Saxophones', 'Brass', 'Percussion', 'Other'
-  ];
-
-  return (
-    <aside className="w-64 bg-white/95 border-l border-slate-200/90 flex flex-col h-full shrink-0 shadow-xs select-none">
-      {/* Panel Title matching mock-up */}
-      <div className="h-14 px-5 flex items-center justify-between shrink-0">
-        <h2 className="text-[16px] font-bold text-slate-900 tracking-tight">Parts</h2>
+export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const ownName = p.parts?.find(part => part.id === p.myPartId)?.name || p.userInstrument;
+  const names = (role: TextureRole) => p.tracks.filter(t => t.id !== p.myPartId && p.activeTexturePartIds.includes(t.id) && p.texture?.[role].includes(t.id)).map(t => t.name);
+  const backingNames = p.tracks.filter(t => t.id !== p.myPartId && !t.isMuted).map(t => t.name);
+  const heard = p.mode === 'own' ? [] : p.mode === 'lines' ? p.selectedRoles.map(r => roleName(r, p.texture)) : backingNames;
+  const ownRole = roles.find(r => p.myPartId && p.texture?.[r].includes(p.myPartId));
+  return <aside aria-label="Practice accompaniment" className="w-80 xl:w-96 bg-white flex flex-col h-full shrink-0 text-slate-900">
+    <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div><h2 className="text-xl font-bold">Practise with</h2>
+        <label htmlFor="my-part" className="block text-xs text-slate-500 mt-3 mb-1">Your part</label>
+        {p.parts?.length ? <select id="my-part" value={p.myPartId ?? ''} onChange={e => p.onMyPartChange?.(e.target.value)} className="w-full rounded-lg bg-slate-100 p-2 text-sm">
+          {p.parts.map(part => <option key={part.id} value={part.id}>{part.name}</option>)}
+        </select> : <p>{ownName}</p>}
       </div>
-
-      {/* Which part am I practising? */}
-      {parts.length > 0 && onMyPartChange && (
-        <div className="px-5 pb-3 shrink-0">
-          <label htmlFor="my-part" className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
-            I'm practising
-          </label>
-          <select
-            id="my-part"
-            value={myPartId ?? ''}
-            onChange={(e) => onMyPartChange(e.target.value)}
-            className="w-full bg-slate-100 hover:bg-slate-200/70 rounded-lg px-3 py-2 text-[13px] font-semibold text-slate-900 outline-hidden cursor-pointer transition-colors"
-          >
-            {parts.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <label className="flex items-center justify-between mt-3 text-[13px] text-slate-700 cursor-pointer">
-            <span>Mute my part while I play</span>
-            <button
-              role="switch"
-              aria-checked={isMinusOneActive}
-              onClick={() => onToggleMinusOne(!isMinusOneActive)}
-              className={`w-10 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${isMinusOneActive ? 'bg-[#10b981]' : 'bg-slate-300'}`}
-            >
-              <div className={`bg-white w-4 h-4 rounded-full shadow-xs transform transition-transform ${isMinusOneActive ? 'translate-x-5' : 'translate-x-0'}`} />
-            </button>
-          </label>
-        </div>
-      )}
-
-      <div className="px-5 pb-3 space-y-2">
-        <button type="button" onClick={onPlayAllParts}
-          aria-pressed={tracks.some(track => track.id !== myPartId) && tracks.filter(track => track.id !== myPartId).every(track => !track.isMuted)}
-          className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700">
-          Play with whole band
-        </button>
-        <label className="flex items-center gap-2 text-xs text-slate-700">
-          <input type="checkbox" checked={automaticBalance}
-            onChange={event => onAutomaticBalanceChange(event.target.checked)} />
-          Automatic balance
-        </label>
-        <p className="text-[11px] text-slate-500">Reduces doubled lines and dense passages. Use Play to start; “Mute my part” still applies.</p>
+      <label className="flex items-start gap-3 cursor-pointer border-b border-slate-100 pb-4">
+        <input aria-label="Hear my part" type="checkbox" className="mt-1 accent-blue-600" checked={!p.isMinusOneActive} onChange={e => p.onToggleMinusOne(!e.target.checked)} />
+        <span><span className="font-semibold text-sm">Hear my part</span><span className="block text-xs text-slate-500 mt-1">Turn off to play it yourself.</span></span>
+      </label>
+      <div className="rounded-lg bg-slate-50 p-3 text-xs" aria-live="polite">
+        <p className="font-semibold">Bar {p.measure}{p.texture ? ` · ${p.texture.label}` : ''}</p>
+        {ownRole && <p className="mt-1 text-slate-600">{p.ownPartResting ? 'Your part rests in this bar' : `Your role: ${roleName(ownRole, p.texture)}`}</p>}
       </div>
-      <div className="px-5 pb-1 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Practise with</div>
-      {/* Scrollable Instrument Track Hierarchy */}
-      <div className="flex-1 overflow-y-auto px-4 py-1 space-y-3.5">
-        {sections.map(secName => {
-          const secTracks = tracks.filter(t => t.section === secName && !(parts.length > 0 && t.id === myPartId));
-          if (secTracks.length === 0) return null;
-          const isFolded = collapsedSections[secName];
-
-          return (
-            <div key={secName} className="space-y-1">
-              {/* Section Header */}
-              <button
-                onClick={() => toggleSection(secName)}
-                className="w-full flex items-center justify-between py-1 px-1 text-left rounded-md hover:bg-slate-50 transition-colors group cursor-pointer"
-              >
-                <span className="text-[13.5px] font-bold text-slate-900 tracking-tight">{secName}</span>
-                {isFolded ? (
-                  <ChevronDown className="w-4 h-4 text-slate-600 group-hover:text-slate-900 transition-transform" />
-                ) : (
-                  <ChevronUp className="w-4 h-4 text-slate-600 group-hover:text-slate-900 transition-transform" />
-                )}
-              </button>
-
-              {/* Tracks in section */}
-              {!isFolded && (
-                <div className="space-y-1.5 pt-0.5">
-                  {secTracks.map(track => {
-                    const isChecked = !track.isMuted;
-
-                    return (
-                      <div
-                        key={track.id}
-                        className="flex items-center gap-2 py-0.5 px-1 rounded-lg hover:bg-slate-50 transition-colors"
-                      >
-                        {/* Checkbox */}
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => onTrackMuteToggle(track.id)}
-                          className="w-4 h-4 rounded text-[#0071e3] accent-[#0071e3] border-slate-300 focus:ring-blue-500 cursor-pointer shrink-0"
-                          title={isChecked ? "Mute track" : "Include track"}
-                        />
-
-                        {/* Track Name */}
-                        <span className={`text-[13px] truncate flex-1 min-w-[70px] ${
-                          isChecked ? 'text-slate-900 font-semibold' : 'text-slate-600 font-normal'
-                        }`}>
-                          {track.name}
-                        </span>
-
-                        {/* If checked, show Eye, Volume Slider, and Speaker matching mockup */}
-                        {isChecked ? (
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {/* Eye icon for sheet music visibility */}
-                            <button
-                              onClick={() => onTrackVisibilityToggle(track.id)}
-                              className={`p-0.5 rounded transition-colors cursor-pointer ${
-                                track.isVisible ? 'text-slate-700 hover:text-slate-950' : 'text-slate-400 hover:text-slate-600'
-                              }`}
-                              title={track.isVisible ? 'Hide staff in score' : 'Show staff in score'}
-                            >
-                              {track.isVisible ? <Eye className="w-4 h-4 text-slate-700" /> : <EyeOff className="w-4 h-4 text-slate-400" />}
-                            </button>
-
-                            {/* Volume Slider */}
-                            <input
-                              type="range"
-                              min="0"
-                              max="100"
-                              value={track.volume}
-                              onChange={(e) => onTrackVolumeChange(track.id, Number(e.target.value))}
-                              className="w-14 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#0071e3]"
-                              title={`Volume: ${track.volume}%`}
-                            />
-
-                            {/* Speaker icon */}
-                            <Volume2 className="w-3.5 h-3.5 text-slate-600" />
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+      <fieldset className="space-y-4"><legend className="sr-only">Practice options</legend>
+        {(['own', 'lines', 'instruments'] as PracticeMode[]).map(mode => <div key={mode}>
+          <label className="flex items-center gap-3 font-semibold text-sm cursor-pointer">
+            <input type="radio" name="practice-mode" value={mode} checked={p.mode === mode} disabled={mode === 'lines' && !p.hasTexture} onChange={() => p.onModeChange(mode)} className="accent-blue-600" />
+            {mode === 'own' ? 'My part only' : mode === 'lines' ? 'With a musical line' : 'Choose instruments'}
+          </label>
+          {mode === 'own' && p.mode === mode && <p className="ml-6 mt-2 text-xs text-slate-500">Your reference sound, with optional metronome.</p>}
+          {mode === 'lines' && !p.hasTexture && <p className="ml-6 mt-2 text-xs text-slate-500">Musical-line analysis is not available for this score yet. Choose instruments below.</p>}
+          {mode === 'lines' && p.mode === mode && <div className="mt-3 space-y-2">
+            {roles.map(role => {
+              const instruments = names(role); const selected = p.selectedRoles.includes(role);
+              return <div key={role} className={`rounded-xl border p-3 ${selected ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold cursor-pointer"><input type="checkbox" className="accent-blue-600" checked={selected} onChange={() => p.onRoleToggle(role)} />{roleName(role, p.texture)}</label>
+                  <button type="button" disabled={!p.canPreview || instruments.length === 0} onClick={() => p.onPreview(role)} aria-label={`Preview ${roleName(role, p.texture)}`} className="text-xs text-blue-700 disabled:text-slate-400 flex items-center gap-1"><Volume2 size={13} />{p.previewRole === role ? 'Stop' : 'Preview'}</button>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Bottom of Right Panel: Reference MIDI & Volume */}
-      <div className="p-4 border-t border-slate-100 bg-white shrink-0 space-y-3">
-        {/* Reference MIDI switch */}
-        <div className="flex items-center justify-between">
-          <span className="text-[13px] font-semibold text-slate-900">Reference MIDI</span>
-          <button
-            onClick={() => onToggleReferenceMidi(!isReferenceMidiActive)}
-            className={`w-10 h-5 flex items-center rounded-full p-0.5 transition-colors cursor-pointer ${
-              isReferenceMidiActive ? 'bg-[#10b981]' : 'bg-slate-300'
-            }`}
-            title="Toggle Reference MIDI"
-          >
-            <div
-              className={`bg-white w-4 h-4 rounded-full shadow-xs transform transition-transform ${
-                isReferenceMidiActive ? 'translate-x-5' : 'translate-x-0'
-              }`}
-            />
-          </button>
-        </div>
-
-        {/* Master Volume Slider with Speaker Icon */}
-        <div className="flex items-center gap-2.5">
-          <Volume2 className="w-4 h-4 text-slate-600 shrink-0" />
-          <input
-            type="range"
-            min="0"
-            max="100"
-            value={masterVolume}
-            onChange={(e) => onMasterVolumeChange(Number(e.target.value))}
-            className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-[#0071e3]"
-            title={`Reference MIDI Volume: ${masterVolume}%`}
-          />
-        </div>
-      </div>
-    </aside>
-  );
+                <p className="mt-2 text-xs leading-relaxed text-slate-600">{(role === 'accompaniment'
+                  ? [...new Set(p.tracks.filter(t => instruments.includes(t.name)).map(t => t.section === 'Percussion' ? 'Percussion' : accompanimentFamily(t.name)))].join(' · ')
+                  : instruments.join(' · ')) || 'No other parts in this line here'}</p>
+                {role === 'accompaniment' && instruments.length > 0 && <details className="mt-2 text-xs text-slate-500"><summary className="cursor-pointer">Show instruments</summary><p className="mt-1 leading-relaxed">{instruments.join(' · ')}</p></details>}
+              </div>;
+            })}
+            <p className="text-xs text-slate-500">Follows the musical line when instruments change. Your part is controlled separately.</p>
+            <p className="text-xs text-slate-500">Based on the saved score analysis. Supporting lines may include replies and decorations.</p>
+          </div>}
+          {mode === 'instruments' && p.mode === mode && <div className="mt-3 space-y-3">
+            <div className="flex gap-2"><button type="button" onClick={p.onPlayAllParts} aria-pressed={backingNames.length > 0 && backingNames.length === p.tracks.filter(t => t.id !== p.myPartId).length} className="flex-1 rounded-lg bg-blue-50 text-blue-700 p-2 text-xs font-semibold">Whole band</button><button type="button" onClick={p.onClearParts} className="rounded-lg border border-slate-200 p-2 text-xs">Clear selection</button></div>
+            <p className="text-xs text-slate-500">Selected instruments stay with you throughout the piece.</p>
+            {(['Woodwinds', 'Saxophones', 'Brass', 'Percussion', 'Other'] as const).map(section => {
+              const tracks = p.tracks.filter(t => t.section === section && t.id !== p.myPartId);
+              if (!tracks.length) return null;
+              return <div key={section}><button type="button" aria-expanded={!collapsed[section]} onClick={() => setCollapsed(prev => ({ ...prev, [section]: !prev[section] }))} className="flex justify-between w-full text-sm font-semibold py-2">{section}{collapsed[section] ? <ChevronDown size={16} /> : <ChevronUp size={16} />}</button>
+                {!collapsed[section] && tracks.map(t => <div key={t.id} className="py-2 border-t border-slate-100">
+                  <label className="flex gap-2 text-xs cursor-pointer"><input type="checkbox" checked={!t.isMuted} onChange={() => p.onTrackMuteToggle(t.id)} className="accent-blue-600" />{t.name}</label>
+                  {!t.isMuted && <div className="flex items-center gap-2 ml-5 mt-2"><button type="button" aria-label={`${t.isVisible ? 'Hide' : 'Show'} ${t.name} staff`} onClick={() => p.onTrackVisibilityToggle(t.id)}>{t.isVisible ? <Eye size={15} /> : <EyeOff size={15} />}</button><input aria-label={`${t.name} volume`} type="range" min="0" max="100" value={t.volume} onChange={e => p.onTrackVolumeChange(t.id, +e.target.value)} className="w-full accent-blue-600" /></div>}
+                </div>)}
+              </div>;
+            })}
+          </div>}
+        </div>)}
+      </fieldset>
+      <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={p.automaticBalance} onChange={e => p.onAutomaticBalanceChange(e.target.checked)} className="accent-blue-600" />Automatic balance</label>
+      <div className="rounded-xl bg-blue-50 p-3 text-xs space-y-2"><p><strong>You play:</strong> {ownName}</p><p><strong>You hear:</strong> {!p.isReferenceMidiActive ? 'Reference audio off' : [...(!p.isMinusOneActive ? ['Your part'] : []), ...heard].join(' + ') || 'No reference parts selected'}</p></div>
+    </div>
+    <div className="p-4 border-t border-slate-100 space-y-3">
+      <label className="flex items-center justify-between text-xs"><span>Reference audio</span><input type="checkbox" checked={p.isReferenceMidiActive} onChange={e => p.onToggleReferenceMidi(e.target.checked)} className="accent-blue-600" /></label>
+      <label className="flex items-center gap-2 text-xs"><Volume2 size={16} /><span className="sr-only">Reference volume</span><input type="range" min="0" max="100" value={p.masterVolume} onChange={e => p.onMasterVolumeChange(+e.target.value)} className="w-full accent-blue-600" /></label>
+    </div>
+  </aside>;
 };

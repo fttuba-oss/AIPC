@@ -68,16 +68,17 @@ export class StudentAudioEngine {
 
   private currentBalanceNotes: NoteEvent[] = [];
   private refreshPartGains(time: number, immediate = false) {
+    const mix = this.selectedMix(this.dynamicBeat);
     const automatic = this.automaticBalance
-      ? ensembleGains(this.currentBalanceNotes, this.partMix) : new Map<string, number>();
+      ? ensembleGains(this.currentBalanceNotes, mix) : new Map<string, number>();
     for (const [route, part] of this.fluidRoutes) {
       const level = this.activeConfig?.dynamics?.length
         ? partDynamicAt(this.activeConfig.dynamics, part.partId, this.dynamicBeat, part.staff) / REFERENCE_DYNAMIC : 1;
-      this.fluid.gain(route, (this.partMix.get(part.partId) ?? 1) * (automatic.get(part.partId) ?? 1) * level, time);
+      this.fluid.gain(route, (mix.get(part.partId) ?? 1) * (automatic.get(part.partId) ?? 1) * level, time);
     }
     for (const [id, bus] of this.partBuses) {
       this.percussion.expression(id, this.dynamicLevels.get(id) ?? 1, time);
-      const gain = (this.partMix.get(id) ?? 1) * (automatic.get(id) ?? 1);
+      const gain = (mix.get(id) ?? 1) * (automatic.get(id) ?? 1);
       bus.gain.cancelScheduledValues(time);
       if (immediate) bus.gain.setValueAtTime(gain, time);
       else bus.gain.setTargetAtTime(gain, time, 0.025);
@@ -149,6 +150,18 @@ export class StudentAudioEngine {
   }
 
   private partMix: Map<string, number> = new Map();
+  private partSelection: ((partId: string, beat: number) => boolean) | null = null;
+
+  /** Evaluated on the audio schedule, so musical-line handoffs do not wait for React. */
+  setPartSelection(selection: ((partId: string, beat: number) => boolean) | null) {
+    this.partSelection = selection;
+    this.refreshPartGains(Tone.now());
+  }
+
+  private selectedMix(beat: number): Map<string, number> {
+    return new Map([...this.partMix].map(([id, gain]) =>
+      [id, this.partSelection && !this.partSelection(id, beat) ? 0 : gain]));
+  }
 
   /** Live per-part gain (0 = silent). Read at trigger time, so it applies during playback too. */
   setPartMix(mix: Record<string, number>) {
@@ -166,7 +179,7 @@ export class StudentAudioEngine {
 
   private triggerNote(note: NoteEvent, noteName: string, duration: number, time: number, baseVelocity: number) {
     const id = note.partId ?? note.instrument ?? 'default';
-    if ((this.partMix.get(id) ?? 1) <= 0) return;
+    if ((this.partMix.get(id) ?? 1) <= 0 || (this.partSelection && !this.partSelection(id, note.beat))) return;
     const velocity = Math.max(0, Math.min(1, baseVelocity));
     if (velocity === 0) return;
     if (this.percussion.play(note, time, duration, velocity, !!this.activeConfig?.dynamics?.length)) return;
@@ -411,6 +424,10 @@ export class StudentAudioEngine {
     }
     this.applyDynamics(fromBeat);
     const expressionBeats = new Set<number>();
+    // Refresh held-note gains at every bar, including silent role handoffs.
+    for (const measure of this.measures()) {
+      if (measure.startBeat > fromBeat && measure.startBeat < endBeat) expressionBeats.add(measure.startBeat);
+    }
     for (const track of config.dynamics || []) {
       for (let i = 0; i < track.points.length; i++) {
         const point = track.points[i];

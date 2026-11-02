@@ -131,3 +131,9 @@ This project is licensed under the MIT License - see the repository details for 
 ## Audio playback and Windows setup
 
 See [Integrated practice playback](docs/AUDIO.md) for FluidR3/FluidSynth, VSCO orchestral percussion, sound-bank installation, controls, credits, and validation. On Windows PowerShell, use `npm.cmd ci` and `npm.cmd run dev -- --host 127.0.0.1 --port 5174 --strictPort`. The first dev/build run prepares the audio assets automatically.
+
+## Musical reasoning library
+
+See [Musical reasoning](docs/musical-reasoning/README.md) for reusable texture-analysis principles, the Sunny Island worked example, a template for new pieces and a record of revisions. Read this library before extending the musical analysis to new repertoire.
+
+See [Student practice panel](docs/PRACTICE-PANEL.md) for own-part, musical-line and instrument accompaniment controls, including the current annotation scope.

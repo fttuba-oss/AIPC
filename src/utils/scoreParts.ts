@@ -36,7 +36,7 @@ export function listScoreParts(xml: string | null | undefined): ScorePartInfo[] 
   }
 }
 
-const FAMILIES = ['piccolo', 'flute', 'oboe', 'bassoon', 'clarinet', 'sax', 'trumpet', 'cornet', 'horn', 'trombone', 'euph', 'baritone', 'tuba', 'timpani', 'perc'];
+const FAMILIES = ['piccolo', 'flute', 'oboe', 'bassoon', 'clarinet', 'alto sax', 'tenor sax', 'baritone sax', 'sax', 'trumpet', 'cornet', 'horn', 'trombone', 'euph', 'baritone', 'tuba', 'timpani', 'perc'];
 const ORDINALS: Record<string, number> = { '1st': 1, first: 1, '2nd': 2, second: 2, '3rd': 3, third: 3, '4th': 4, fourth: 4 };
 
 function numberIn(text: string): number | null {
