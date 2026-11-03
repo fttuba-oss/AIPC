@@ -1555,6 +1555,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {/* ------------------------------------------------------------------ */}
       {/* Region 1: Narrow Left Navigation */}
       <MobilePracticeHeader title={pieceTitle} part={myPartName}
+        parts={scoreParts} partId={myPartId} onPartChange={handleMyPartChange}
         section={currentTexture ? `${currentTexture.label} · ${currentTexture.start}–${currentTexture.end}` : `Bar ${practiceMeasure}`}
         onRoles={() => setMobilePanel('roles')} blocked={mobileLayout && mobilePanel !== null} />
       {/* ------------------------------------------------------------------ */}

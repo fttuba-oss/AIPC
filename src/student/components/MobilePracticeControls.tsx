@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Play, Pause, RotateCcw, MoreHorizontal, ChevronUp, X } from 'lucide-react';
+import { Play, Pause, RotateCcw, MoreHorizontal, ChevronUp, ChevronDown, X } from 'lucide-react';
 
 export type MobilePanel = 'practice' | 'roles' | 'more' | null;
 export const MOBILE_PRACTICE_QUERY = '(max-width: 1023px), (any-pointer: coarse) and (max-width: 1400px)';
@@ -16,12 +16,22 @@ function usePracticeMedia(query: string) {
 export function useMobilePracticeLayout() { return usePracticeMedia(MOBILE_PRACTICE_QUERY); }
 export function useCompactPortraitScore() { return usePracticeMedia('(max-width: 560px) and (orientation: portrait)'); }
 
-export function MobilePracticeHeader({ title, part, section, onRoles, blocked }: {
+export function MobilePracticeHeader({ title, part, section, onRoles, blocked, parts, partId, onPartChange }: {
   title: string; part: string; section: string; onRoles: () => void; blocked: boolean;
+  parts: { id: string; name: string }[]; partId: string | null; onPartChange: (id: string) => void;
 }) {
   return <header className="aipc-mobile-heading" inert={blocked}>
     <strong className="aipc-mobile-brand">AIPC</strong>
-    <span className="aipc-mobile-piece" title={`${title} · ${part}`}>{title} · {part}</span>
+    <div className="aipc-mobile-piece">
+      <span className="aipc-mobile-title" title={title}>{title}</span>
+      {parts.length ? <label className="aipc-mobile-header-part">
+        <span className="sr-only">Your instrument part</span>
+        <select value={partId ?? ''} onChange={event => onPartChange(event.target.value)} title={part}>
+          {parts.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+        <ChevronDown size={14} aria-hidden="true" />
+      </label> : <span>{part}</span>}
+    </div>
     <button type="button" className="aipc-mobile-role-button" onClick={onRoles} aria-label="Open role map">
       <span className="aipc-mobile-section">{section}</span><span>Role map</span>
     </button>

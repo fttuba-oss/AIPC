@@ -54,6 +54,8 @@ Below 1024 CSS pixels, or on touch screens up to 1400 CSS pixels, desktop naviga
 
 **Practise with** opens the existing controls in a bottom sheet; **Done**, Escape or the backdrop closes it. **Role map** opens that sheet with the map expanded. **More** contains subdivisions/count-in, playback seeking, recording and navigation. Opening settings does not resize/re-engrave the score or discard selections. The sheet traps keyboard focus, makes background controls inert, and restores focus when closed.
 
+The part name in the phone/iPad top banner is also a native instrument selector. It uses the same handler as the panel's part picker, keeping the displayed score, reference playback, musical roles and mixer selection synchronised while retaining the selected bar. The header keeps its compact height, and longer part names are available in the native picker.
+
 Keyboard Space activates focused buttons normally. The development tap shortcut ignores interactive controls, and the strategy coach's shortcuts are inactive while its modal is closed.
 
 Controlled width reflow replaces OSMD's competing automatic resize handler. The tracker keeps its musical beat when rotating or changing parts and is repositioned using newly measured geometry. Landscape checks use 844×390 and 667×375 phone viewports; portrait checks use 390×844, followed by desktop restoration. These are browser-emulation checks, not certification on every physical phone or browser.
