@@ -1183,9 +1183,11 @@ export const AipcStrategyCoachModal: React.FC<AipcStrategyCoachModalProps> = ({
 
   // Keyboard controls: Space (tap/start), Escape (stop), R (restart)
   useEffect(() => {
+    if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
-      const isInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
+      const isInput = activeEl?.closest('input, textarea, select, button, summary, a, [contenteditable="true"]');
+      if (e.defaultPrevented) return;
 
       if (e.code === 'Space') {
         if (!isInput) {
@@ -1211,7 +1213,7 @@ export const AipcStrategyCoachModal: React.FC<AipcStrategyCoachModalProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [handleTap, phase, isDemoMode, startPracticeAttempt, handleStopExercise, handleRestartExercise]);
+  }, [isOpen, handleTap, phase, isDemoMode, startPracticeAttempt, handleStopExercise, handleRestartExercise]);
 
   // Exit back to student portal
   const handleFinishAndReturn = useCallback(() => {

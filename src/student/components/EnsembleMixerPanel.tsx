@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Volume2, Eye, EyeOff, ChevronDown, ChevronUp } from 'lucide-react';
 import type { PracticeMode, TextureRole, TextureSpan, PartRoleSegment } from '../../utils/practiceTexture';
 import { availablePracticeRoles } from '../../utils/practiceTexture';
@@ -42,6 +42,7 @@ interface EnsembleMixerPanelProps {
   canPreview: boolean;
   activeTexturePartIds: string[];
   ownPartResting: boolean;
+  expandRoleMap?: boolean;
   extractionReviewBars: number[];
 }
 const roles: TextureRole[] = ['melody', 'countermelody', 'accompaniment'];
@@ -58,6 +59,14 @@ const roleName = (role: TextureRole, texture?: TextureSpan) => role === 'melody'
   : role === 'accompaniment' ? 'Accompaniment' : texture?.secondaryLabel || 'Countermelody';
 
 export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
+  const roleMapRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (p.expandRoleMap && roleMapRef.current) {
+      roleMapRef.current.open = true;
+      const frame = requestAnimationFrame(() => roleMapRef.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' }));
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [p.expandRoleMap, p.roleSegments.length]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const ownName = p.parts?.find(part => part.id === p.myPartId)?.name || p.userInstrument;
   const names = (role: TextureRole) => p.tracks.filter(t => t.id !== p.myPartId && p.activeTexturePartIds.includes(t.id) && p.texture?.[role].includes(t.id)).map(t => t.name);
@@ -87,7 +96,7 @@ export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
         {roleSegment ? <><p className="mt-1 text-slate-700 font-medium">Your role: {roleSegment.label} · Bars {roleSegment.start}–{roleSegment.end}</p>
           {nextRoleSegment && <p className="mt-1 text-slate-500">Next: {nextRoleSegment.label} · Bars {nextRoleSegment.start}–{nextRoleSegment.end}</p>}</>
           : ownRole && <p className="mt-1 text-slate-600">{p.ownPartResting ? 'Your part rests in this bar' : `Your role: ${roleName(ownRole, p.texture)}`}</p>}
-        {p.roleSegments.length > 0 && <details className="mt-3"><summary className="cursor-pointer text-blue-700">View my role map</summary>
+        {p.roleSegments.length > 0 && <details ref={roleMapRef} className="mt-3"><summary className="cursor-pointer text-blue-700">View my role map</summary>
           <div className="mt-2 max-h-52 overflow-y-auto space-y-1">{p.roleSegments.map(segment => <button key={segment.start} type="button" onClick={() => p.onSectionSeek(segment.start)} aria-current={segment === roleSegment ? 'true' : undefined}
             className={`block w-full rounded p-2 text-left ${segment === roleSegment ? 'bg-blue-100 text-blue-900' : 'hover:bg-slate-100'}`}>Bars {segment.start}–{segment.end} · {segment.label}</button>)}</div>
           <p className="mt-2 text-slate-500">Phrase-level roles; pickups and overlapping lines can share a bar.</p>

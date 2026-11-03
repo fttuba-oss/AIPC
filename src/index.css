@@ -107,3 +107,72 @@ button, select, input, [role="button"] {
   background-color: #ffffff !important;
   border-radius: 12px;
 }
+/* Score-first student practice. The settings sheet never changes score width. */
+.aipc-practice-shell { height: 100dvh; }
+.aipc-mobile-heading, .aipc-mobile-transport, .aipc-mobile-sheet-heading { display: none; }
+.aipc-take-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; }
+.aipc-mixer-border[hidden] { display: none; }
+@media (max-width: 1023px), (any-pointer: coarse) and (max-width: 1400px) {
+  .aipc-practice-shell { flex-direction: column; width: 100%; max-width: 100vw; background: #fdfcf9; }
+  .aipc-desktop-nav, .aipc-desktop-transport, .aipc-record-strip { display: none; }
+  .aipc-mobile-heading { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-height: 44px;
+    padding: max(2px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 2px max(8px, env(safe-area-inset-left));
+    border-bottom: 1px solid #e2e8f0; background: white; color: #142846; }
+  .aipc-mobile-brand { font-size: 17px; letter-spacing: -.5px; }
+  .aipc-mobile-piece { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 600; }
+  .aipc-mobile-role-button { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 12px; flex-shrink: 0; }
+  .aipc-mobile-role-button > span:last-child { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font-weight: 600; }
+  .aipc-mobile-section { max-width: 24vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .aipc-score-workspace { height: auto; min-height: 0; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+  .aipc-score-card { border: 0; border-radius: 0; box-shadow: none; }
+  .aipc-score-view-wrapper { overflow: hidden; }
+  .aipc-score-workspace [data-score-viewport] { min-height: 0; padding: 0 4px; touch-action: pan-x pan-y pinch-zoom; overscroll-behavior: contain; }
+  .aipc-mobile-transport { display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-shrink: 0;
+    padding: 5px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    border-top: 1px solid #e2e8f0; background: white; color: #172e50; }
+  .aipc-mobile-transport button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 9px; flex-shrink: 0; touch-action: manipulation; }
+  .aipc-mobile-transport button:focus-visible, .aipc-mobile-heading button:focus-visible { outline: 2px solid #0071e3; outline-offset: 1px; }
+  .aipc-mobile-transport .aipc-mobile-play { border-radius: 50%; background: #0071e3; color: white; }
+  .aipc-mobile-play:disabled { opacity: .5; }
+  .aipc-mobile-tempo { display: flex; align-items: center; gap: 1px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .aipc-mobile-tempo button { font-size: 23px; }
+  .aipc-mobile-click { gap: 6px; font-size: 12px; }
+  .aipc-mini-switch { width: 28px; height: 17px; border-radius: 20px; background: #cbd5e1; position: relative; }
+  .aipc-mini-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: white; }
+  .aipc-mini-switch.is-on { background: #0071e3; }
+  .aipc-mini-switch.is-on::after { left: 13px; }
+  .aipc-mobile-transport .aipc-mobile-practice { border: 1px solid #0071e3; color: #0064cc; padding: 0 10px; gap: 5px; min-width: 0; flex-shrink: 1; max-width: 35vw; font-size: 12px; font-weight: 600; }
+  .aipc-mobile-practice > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .aipc-mixer-shell { display: none; }
+  .aipc-mixer-shell.is-open { display: flex; flex-direction: column; position: fixed; z-index: 101; left: 0; right: 0; bottom: 0;
+    height: min(90dvh, 720px); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: white; border-radius: 18px 18px 0 0; box-shadow: 0 -8px 40px #0f172a33; }
+  .aipc-mobile-backdrop { position: fixed; inset: 0; z-index: 100; background: #0f172a66; }
+  .aipc-mobile-sheet-heading { display: flex; align-items: center; justify-content: space-between; padding: 2px 16px; border-bottom: 1px solid #e2e8f0; flex-shrink: 0; }
+  .aipc-mobile-sheet-heading button { display: flex; align-items: center; gap: 8px; color: #0064cc; min-height: 44px; min-width: 64px; }
+  .aipc-mixer-border { flex: 1; min-height: 0; height: auto; border: 0; border-radius: 0; }
+  .aipc-mixer-border > aside { width: 100%; max-width: 100%; }
+  .aipc-mixer-border input[type=checkbox], .aipc-mixer-border input[type=radio] { min-width: 20px; min-height: 20px; }
+  .aipc-mixer-border select { min-height: 44px; font-size: 16px; }
+  .aipc-mixer-border summary { min-height: 32px; }
+  .aipc-mobile-more { overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  .aipc-mobile-more > div > button { min-height: 44px; background: #eff6ff; color: #164e8b; border-radius: 8px; }
+}
+@media (max-width: 560px) {
+  .aipc-mobile-section, .aipc-mobile-bpm-unit { display: none; }
+  .aipc-mobile-transport { display: grid; grid-template-columns: 44px 44px 1fr 44px; gap: 4px; }
+  .aipc-mobile-transport > button:nth-child(1) { grid-row: 1; grid-column: 1; }
+  .aipc-mobile-transport > button:nth-child(2) { grid-row: 1; grid-column: 2; }
+  .aipc-mobile-tempo { grid-row: 1; grid-column: 3; justify-content: center; }
+  .aipc-mobile-transport > button:last-child { grid-row: 1; grid-column: 4; }
+  .aipc-mobile-transport .aipc-mobile-click { grid-row: 2; grid-column: 1 / 3; }
+  .aipc-mobile-transport .aipc-mobile-practice { grid-row: 2; grid-column: 3 / 5; max-width: none; }
+}
+
+/* iPad landscape: temporary drawer, never a permanent deduction from score width. */
+@media (any-pointer: coarse) and (min-width: 768px) and (min-height: 600px) and (max-width: 1400px) and (orientation: landscape) {
+  .aipc-mixer-shell.is-open { left: auto; top: 0; width: min(380px, 40vw); min-width: 320px; height: 100dvh; border-radius: 16px 0 0 16px; }
+}
+@media (max-width: 1023px), (any-pointer: coarse) and (max-width: 1400px) {
+  .aipc-score-workspace [data-score-paper] { max-width: none; }
+}

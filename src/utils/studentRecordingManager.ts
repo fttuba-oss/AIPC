@@ -45,6 +45,16 @@ export interface PracticeSession {
 
 const STORAGE_KEY = 'aipc_practice_sessions';
 const ACTIVE_SESSION_ID_KEY = 'aipc_active_session_id';
+// Storage can be unavailable in restricted/private browser contexts. Practice must still open.
+const sessionMemory = new Map<string, string>();
+function sessionRead(key: string): string | null {
+  try { return localStorage.getItem(key) ?? sessionMemory.get(key) ?? null; }
+  catch { return sessionMemory.get(key) ?? null; }
+}
+function sessionWrite(key: string, value: string): void {
+  sessionMemory.set(key, value);
+  try { localStorage.setItem(key, value); } catch { /* Keep this browser session usable without persistence. */ }
+}
 
 // In-memory cache of created blob URLs
 export const activeBlobRegistry = new Map<string, Blob>();
@@ -61,7 +71,7 @@ export const MOCK_STUDENTS = [
  */
 export function getAllPracticeSessions(): PracticeSession[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = sessionRead(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -145,7 +155,7 @@ export function getAllPracticeSessions(): PracticeSession[] {
   ];
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedSessions));
+    sessionWrite(STORAGE_KEY, JSON.stringify(seedSessions));
   } catch (e) {
     // ignore
   }
@@ -158,7 +168,7 @@ export function getAllPracticeSessions(): PracticeSession[] {
  */
 export function saveAllPracticeSessions(sessions: PracticeSession[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+    sessionWrite(STORAGE_KEY, JSON.stringify(sessions));
   } catch (e) {
     console.error('Failed to save practice sessions', e);
   }
@@ -169,7 +179,7 @@ export function saveAllPracticeSessions(sessions: PracticeSession[]): void {
  */
 export function getOrCreateActiveSession(pieceName: string, instrumentName: string): PracticeSession {
   const sessions = getAllPracticeSessions();
-  const activeId = localStorage.getItem(ACTIVE_SESSION_ID_KEY);
+  const activeId = sessionRead(ACTIVE_SESSION_ID_KEY);
 
   if (activeId) {
     const existing = sessions.find(s => s.sessionId === activeId && !s.isSubmitted);
@@ -196,7 +206,7 @@ export function getOrCreateActiveSession(pieceName: string, instrumentName: stri
 
   sessions.unshift(newSession);
   saveAllPracticeSessions(sessions);
-  localStorage.setItem(ACTIVE_SESSION_ID_KEY, newSession.sessionId);
+  sessionWrite(ACTIVE_SESSION_ID_KEY, newSession.sessionId);
   return newSession;
 }
 

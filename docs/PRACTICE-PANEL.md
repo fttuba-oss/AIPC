@@ -47,3 +47,21 @@ Role annotations expand to the independent IDs. Verified Sunny Island flute 2 su
 ## Checks
 
 `npm test` includes score binding, thematic handoffs, fixed-instrument behaviour, independent own-reference selection and annotation coverage. Run `npm run build` for type checking and the production build. Browser checks should cover radio/checkbox controls, whole-band on/off, previews, seeking across E/F/H, and unsupported-score messaging.
+
+## Mobile score-first layout
+
+Below 1024 CSS pixels, or on touch screens up to 1400 CSS pixels, desktop navigation and the persistent mixer are replaced by a compact title/part/section header and bottom transport. This includes landscape iPads that previously retained both desktop sidebars. The score uses the available width, smaller paper margins and readable 1.05 engraving zoom rather than shrinking a desktop page. Its repeated title/one-part labels are omitted; explicitly displayed additional staves retain part labels. Narrow portrait phones use a two-row transport to keep touch targets usable. Safe-area insets and dynamic viewport height accommodate phone notches and browser controls. The student page permits native browser pinch zoom.
+
+**Practise with** opens the existing controls in a bottom sheet; **Done**, Escape or the backdrop closes it. **Role map** opens that sheet with the map expanded. **More** contains subdivisions/count-in, playback seeking, recording and navigation. Opening settings does not resize/re-engrave the score or discard selections. The sheet traps keyboard focus, makes background controls inert, and restores focus when closed.
+
+Keyboard Space activates focused buttons normally. The development tap shortcut ignores interactive controls, and the strategy coach's shortcuts are inactive while its modal is closed.
+
+Controlled width reflow replaces OSMD's competing automatic resize handler. The tracker keeps its musical beat when rotating or changing parts and is repositioned using newly measured geometry. Landscape checks use 844×390 and 667×375 phone viewports; portrait checks use 390×844, followed by desktop restoration. These are browser-emulation checks, not certification on every physical phone or browser.
+
+### iPad presentation and startup
+
+Landscape touch tablets use a temporary side drawer, up to 380 CSS pixels wide, instead of a permanent mixer. Portrait uses the bottom sheet. Opening controls never reduces the score's layout width. Tablet checks cover 1194×834, 834×1194 and 1366×1024, including part/section retention after rotation.
+
+OSMD 2.1.2 has a cross-system wavy/trill-line calculation that indexes visible staves using a full-score staff number. After hiding instruments, some line breaks cause `undefined.Measures` and leave an empty SVG. `scoreRendererFixes.ts` installs an isolated calculator adapter that resolves the staff by identity for that calculation, then restores the original systems. Trill continuation marks remain enabled. Review this adapter when upgrading OSMD. Regression checks must verify actual visible SVG notation and renderer warnings, not just a visible cursor or successful app startup.
+
+Session storage falls back to memory when localStorage access is denied, so a restricted browser context can still practise. Those sessions are not guaranteed to persist after reload. The student HTML has a module-load failure message; the React startup boundary reports render failures with reload/error details. Score loading/redraw failures also have visible status messages. These measures address reproducible failure paths; an unverified device-specific blank screen still needs the iPadOS/browser version and failing URL. Safari/WebKit could not be installed in this execution environment, so the tablet checks use Chromium touch emulation.

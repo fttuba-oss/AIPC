@@ -1,4 +1,5 @@
 import { prepareScoreForDisplay } from '../utils/scoreDisplay';
+import { installWavyLineStaffFix } from '../utils/scoreRendererFixes';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { trackerPositionAt, type TrackerAnchor } from '../utils/scoreTracker';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
@@ -14,6 +15,7 @@ import {
 interface StudentScoreViewerProps {
   xmlUrl?: string;
   xmlContent?: string | null;
+  compact?: boolean;
   startMeasure: number;
   playbackStartBeat?: number | null;
   endMeasure: number;
@@ -51,6 +53,7 @@ function applyVisibleParts(osmd: OpenSheetMusicDisplay, ids: string[] | null | u
 export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   xmlUrl,
   xmlContent,
+  compact = false,
   startMeasure,
   playbackStartBeat,
   endMeasure,
@@ -100,8 +103,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   const playbackRef = useRef({ playbackProgress, getPlaybackTime });
   playbackRef.current = { playbackProgress, getPlaybackTime };
   const lastTrackerSystemRef = useRef<number | null>(null);
-  const viewStateRef = useRef({ scoreData, startMeasure, playbackStartBeat, isPlaying });
-  viewStateRef.current = { scoreData, startMeasure, playbackStartBeat, isPlaying };
+  const viewStateRef = useRef({ scoreData, startMeasure, playbackStartBeat, isPlaying, compact });
+  viewStateRef.current = { scoreData, startMeasure, playbackStartBeat, isPlaying, compact };
   const trackerBeat = useCallback(() => {
     const view = viewStateRef.current;
     const clock = playbackRef.current;
@@ -128,7 +131,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         const y = wrapperRef.current.getBoundingClientRect().top + position.top;
         const box = viewport.getBoundingClientRect();
         if (y < box.top + 16 || y + position.height > box.bottom - 24) {
-          viewport.scrollTo({ top: viewport.scrollTop + y - box.top - 48,
+          viewport.scrollTo({ top: viewport.scrollTop + y - box.top - (viewStateRef.current.compact ? 72 : 48),
             behavior: immediate || matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
         }
       }
@@ -263,13 +266,14 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     if (!containerRef.current) return;
 
     let isMounted = true;
+    setIsLoaded(false);
     containerRef.current.innerHTML = '';
     if (customCursorRef.current) {
       customCursorRef.current.style.display = 'none';
     }
 
     const osmd = new OpenSheetMusicDisplay(containerRef.current, {
-      autoResize: true,
+      autoResize: false,
       backend: 'svg',
       drawTitle: false,
       drawSubtitle: false,
@@ -300,8 +304,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     osmd.EngravingRules.PageTopMargin = 0;
     (window as any).osmd = osmd;
     osmd.EngravingRules.PageBottomMargin = 0;
-    osmd.EngravingRules.PageLeftMargin = 4;
-    osmd.EngravingRules.PageRightMargin = 4;
+    osmd.EngravingRules.PageLeftMargin = compact ? 0.8 : 4;
+    osmd.EngravingRules.PageRightMargin = compact ? 0.8 : 4;
     osmd.EngravingRules.MinimumDistanceBetweenSystems = 2.8;
     osmd.EngravingRules.MinSkyBottomDistBetweenSystems = 1.8;
     osmd.EngravingRules.StaffDistance = 4.8;
@@ -331,7 +335,8 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         if (!isMounted) return;
         await osmd.load(prepareScoreForDisplay(xmlText.replace(/&amp;amp;/g, '&amp;')));
         if (!isMounted) return;
-        osmd.zoom = zoom;
+        installWavyLineStaffFix(osmd);
+        osmd.zoom = compact ? 1.05 : zoom;
         applyVisibleParts(osmd, visiblePartsRef.current);
 
         // 1. First ensure OSMD is configured with full bounds so we parse the entire piece
@@ -414,10 +419,14 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     if (!osmd || !isLoaded) return;
     try {
       applyVisibleParts(osmd, visiblePartsRef.current);
+      osmd.setOptions({ drawPartNames: !compact || (visiblePartsRef.current?.length ?? 1) > 1 });
       osmd.render();
       refreshCachedNoteheads();
+      setErrorMsg(null);
     } catch (e) {
       console.warn('[StudentScoreViewer] Could not apply part visibility:', e);
+      setErrorMsg('The score could not be redrawn. Please reload and try again.');
+      trackerAnchorsRef.current = [];
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleKey, isLoaded]);
@@ -457,40 +466,71 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       (osmd as any).rules.MaxMeasureToDrawIndex = Number.MAX_VALUE;
     }
 
+    // The mobile header supplies the title; use the paper for readable notation.
+    osmd.setOptions({ drawTitle: !compact && !shouldFocus, drawSubtitle: !compact && !shouldFocus,
+      drawComposer: !compact && !shouldFocus, drawPartNames: !compact || (visiblePartIds?.length ?? 1) > 1 });
+    osmd.EngravingRules.PageLeftMargin = compact ? 0.8 : 4;
+    osmd.EngravingRules.PageRightMargin = compact ? 0.8 : 4;
+    osmd.zoom = compact ? 1.05 : zoom;
+
     try {
       osmd.render();
       refreshCachedNoteheads();
       osmd.cursor?.hide();
+      setErrorMsg(null);
     } catch (e) {
       console.warn('[StudentScoreViewer] Re-render error on section update:', e);
+      setErrorMsg('The score could not be redrawn. Please reload and try again.');
+      trackerAnchorsRef.current = [];
     }
-  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads]);
+  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads, compact]);
 
   // 3. Zoom updates
   useEffect(() => {
     if (osmdRef.current && isLoaded) {
-      osmdRef.current.zoom = zoom;
+      osmdRef.current.zoom = compact ? 1.05 : zoom;
       osmdRef.current.render();
       refreshCachedNoteheads();
       osmdRef.current.cursor?.hide();
     }
-  }, [zoom, isLoaded, refreshCachedNoteheads]);
+  }, [zoom, compact, isLoaded, refreshCachedNoteheads]);
 
   // Rebuild cached coordinates after notation, zoom, visibility or container-size changes.
   useEffect(() => {
     if (!isLoaded) return;
     let pending = 0;
+    let layoutFrame = 0;
+    let width = containerRef.current?.clientWidth ?? 0;
     const schedule = () => {
       cancelAnimationFrame(pending);
       pending = requestAnimationFrame(rebuildTrackerAnchors);
     };
-    const resize = new ResizeObserver(schedule);
+    const resize = new ResizeObserver(() => {
+      const nextWidth = containerRef.current?.clientWidth ?? 0;
+      if (nextWidth > 0 && Math.abs(nextWidth - width) > 1) {
+        width = nextWidth;
+        cancelAnimationFrame(layoutFrame);
+        layoutFrame = requestAnimationFrame(() => {
+          try {
+            osmdRef.current?.cursor?.hide();
+            osmdRef.current?.render();
+            refreshCachedNoteheads();
+            setErrorMsg(null);
+            schedule();
+          } catch (error) {
+            console.warn('[StudentScoreViewer] Could not reflow score:', error);
+            setErrorMsg('The score could not be resized. Please reload and try again.');
+            trackerAnchorsRef.current = [];
+          }
+        });
+      } else schedule();
+    });
     if (wrapperRef.current) resize.observe(wrapperRef.current);
     const mutations = new MutationObserver(schedule);
     if (containerRef.current) mutations.observe(containerRef.current, { childList: true, subtree: true });
     schedule();
-    return () => { cancelAnimationFrame(pending); resize.disconnect(); mutations.disconnect(); };
-  }, [isLoaded, zoom, visibleKey, activeViewMode, endMeasure, rebuildTrackerAnchors]);
+    return () => { cancelAnimationFrame(pending); cancelAnimationFrame(layoutFrame); resize.disconnect(); mutations.disconnect(); };
+  }, [isLoaded, zoom, visibleKey, activeViewMode, endMeasure, rebuildTrackerAnchors, refreshCachedNoteheads]);
 
   // One animation loop reads the audio clock directly, independent of React's update cadence.
   useEffect(() => {
@@ -720,6 +760,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
 
       {/* Sheet Music Canvas Area */}
       <div data-score-viewport style={{ overflowAnchor: 'none', scrollBehavior: 'auto' }} className="flex-1 overflow-auto px-2 py-1 flex flex-col items-center justify-start min-h-[300px] bg-[#fdfcf9]">
+        {!isLoaded && !errorMsg && <p role="status" className="p-6 text-sm text-slate-600">Preparing the score…</p>}
         {errorMsg && (
           <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 text-xs max-w-md text-center my-auto">
             {errorMsg}
@@ -729,6 +770,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         {/* Relative wrapper holding both OSMD SVG and custom glowing tracker cursor - Clean sheet music surface */}
         <div
           ref={wrapperRef}
+          data-score-paper
           className="relative w-full max-w-[1010px] mx-auto flex flex-col items-center bg-[#fdfcf9] text-slate-900 min-h-[220px] cursor-pointer select-none"
           onClick={handleSvgClick}
         >

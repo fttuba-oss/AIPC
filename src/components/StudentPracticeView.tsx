@@ -18,6 +18,7 @@ import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartA
 import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
 import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
 import { splitCombinedScore } from '../utils/splitScoreParts';
+import { MobilePracticeHeader, MobilePracticeToolbar, ResponsivePracticePanel, useMobilePracticeLayout, type MobilePanel } from '../student/components/MobilePracticeControls';
 import {
   MediaRecordingEngine,
   getOrCreateActiveSession,
@@ -71,6 +72,9 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   // ------------------------------------------------------------------
   // Section Navigation & Practice Agenda State
   // ------------------------------------------------------------------
+  const mobileLayout = useMobilePracticeLayout();
+  const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
+  useEffect(() => { if (!mobileLayout) setMobilePanel(null); }, [mobileLayout]);
   const [viewMode, setViewMode] = useState<'focus' | 'full'>('full');
   const [startFromBeat, setStartFromBeat] = useState<number | null>(null);
   const [startFromMeasure, setStartFromMeasure] = useState<number | null>(null);
@@ -196,6 +200,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     stopPreview();
   }, [xmlContent, stopPreview]);
   useEffect(() => () => { previewEngineRef.current?.dispose(); }, []);
+  const closeMobilePanel = useCallback(() => { stopPreview(); setMobilePanel(null); }, [stopPreview]);
   const [audioError, setAudioError] = useState<string | null>(null);
   const [preparingAudio, setPreparingAudio] = useState(false);
   const [masterVolume, setMasterVolume] = useState<number>(75);
@@ -709,8 +714,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
-      const isInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
-      if (isInput) return;
+      const isInteractive = activeEl?.closest('input, textarea, select, button, summary, a, [contenteditable="true"], [role="dialog"]');
+      if (isInteractive || e.defaultPrevented) return;
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -1543,11 +1548,14 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     ? Math.floor(beatWithinBar % countInPulses(displayedMeter.numerator, displayedMeter.denominator)) + 1 : null;
 
   return (
-    <div className="flex h-screen w-screen bg-[#f5f5f7] text-slate-800 select-none overflow-hidden font-sans">
+    <div className="aipc-practice-shell flex h-screen w-screen bg-[#f5f5f7] text-slate-800 select-none overflow-hidden font-sans">
       {/* ------------------------------------------------------------------ */}
       {/* Region 1: Narrow Left Navigation */}
+      <MobilePracticeHeader title={pieceTitle} part={myPartName}
+        section={currentTexture ? `${currentTexture.label} · ${currentTexture.start}–${currentTexture.end}` : `Bar ${practiceMeasure}`}
+        onRoles={() => setMobilePanel('roles')} blocked={mobileLayout && mobilePanel !== null} />
       {/* ------------------------------------------------------------------ */}
-      <aside className="w-56 flex flex-col justify-between py-6 px-5 select-none shrink-0 border-r border-slate-200/60">
+      <aside className="aipc-desktop-nav w-56 flex flex-col justify-between py-6 px-5 select-none shrink-0 border-r border-slate-200/60">
         <div>
           {/* Logo */}
           <div className="mb-7 pl-1">
@@ -1613,9 +1621,9 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {/* ------------------------------------------------------------------ */}
       {/* Region 2: Central Score Workspace + Top Toolbar */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden p-3 pl-0 pr-3">
+      <div className="aipc-score-workspace flex-1 flex flex-col min-w-0 h-full overflow-hidden p-3 pl-0 pr-3" inert={mobileLayout && mobilePanel !== null}>
         {/* Top Toolbar matching Reference Mock-up */}
-        <header className="relative z-30 min-h-14 py-2 gap-3 flex-wrap bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/80 shadow-xs px-4 flex items-center justify-between shrink-0 mb-3 select-none">
+        <header className="aipc-desktop-transport relative z-30 min-h-14 py-2 gap-3 flex-wrap bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/80 shadow-xs px-4 flex items-center justify-between shrink-0 mb-3 select-none">
           {/* Left Group: Playback & Timeline Scrubber */}
           <div className="flex items-center gap-3">
             {/* |< Restart */}
@@ -1688,12 +1696,13 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
         {preparingAudio && <div role="status" className="px-4 py-2 text-sm text-blue-800 bg-blue-50">Preparing instrument sounds… First playback may take a moment.</div>}
         {audioError && <div role="alert" className="px-4 py-2 text-sm text-red-800 bg-red-50">{audioError}</div>}
         {/* Central Card: Score, Plan or Shared Recordings */}
-        <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden bg-white/90 backdrop-blur-xs rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="aipc-score-card flex-1 flex flex-col min-h-0 relative overflow-hidden bg-white/90 backdrop-blur-xs rounded-2xl border border-slate-200/80 shadow-xs">
           {activeNavTab === 'score' && (
             <>
               {/* Sheet Music Score Area */}
-              <div className="flex-1 overflow-auto min-h-0 relative">
+              <div className="aipc-score-view-wrapper flex-1 overflow-auto min-h-0 relative">
                 <StudentScoreViewer
+                  compact={mobileLayout}
                   xmlUrl={xmlUrl}
                   xmlContent={practiceXmlContent}
                   playbackStartBeat={startFromBeat}
@@ -1761,7 +1770,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               </div>
 
               {/* Single Small Floating Record Pill Control Beneath the Score */}
-              <div className="py-2.5 flex justify-center shrink-0 border-t border-slate-100 bg-[#fdfdfd]/95 select-none">
+              <div className="aipc-record-strip py-2.5 flex justify-center shrink-0 border-t border-slate-100 bg-[#fdfdfd]/95 select-none">
                 <button
                   onClick={playbackPhase === 'idle' ? handleStartRecordingTake : handleFinishPlayback}
                   className="px-5 py-2 rounded-full border border-slate-200/90 bg-white hover:bg-slate-50 shadow-xs flex items-center gap-2.5 text-[13px] font-semibold text-slate-800 transition-all active:scale-95 cursor-pointer hover:shadow-sm"
@@ -1891,9 +1900,27 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       {/* ------------------------------------------------------------------ */}
       {/* Region 3: Compact Right Panel: Practise with */}
       {/* ------------------------------------------------------------------ */}
-      <div className="py-3 pr-3 shrink-0 h-full">
-        <div className="h-full rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs">
+      <ResponsivePracticePanel mobile={mobileLayout} panel={mobilePanel} onClose={closeMobilePanel}
+        more={<>
+          <h3 className="font-semibold">Tempo & metronome</h3>
+          <MetronomeControls quarterBpm={currentBpm} numerator={displayedMeter.numerator} denominator={displayedMeter.denominator}
+            subdivision={subdivision} muted={isMetronomeMuted} countIn={countInEnabled} activeBeat={activeMetronomeBeat}
+            onBpmChange={handleBpmChange} onSubdivisionChange={handleSubdivisionChange}
+            onMutedChange={muted => { setIsMetronomeMuted(muted); audioEngineRef.current?.setMetronomeMuted(muted); }} onCountInChange={setCountInEnabled} />
+          <label className="block text-sm">Playback position
+            <input aria-label="Playback position" type="range" min={timelineStartSec} max={totalDurationSec} step="0.1"
+              value={Math.max(timelineStartSec, Math.min(totalDurationSec, playbackProgress))} onChange={e => handleTimelineScrub(+e.target.value)} className="block w-full mt-3 accent-blue-600" />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('score'); }}>Score</button>
+            {!trialMode && <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('plan'); }}>Practice plan</button>}
+            <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('recordings'); }}>My recordings</button>
+            <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('score'); if (playbackPhase === 'idle') handleStartRecordingTake(); else handleFinishPlayback(); }}>{isRecordingTake ? 'Stop recording' : 'Record practice'}</button>
+          </div>
+          {trialMode && <p className="text-xs text-slate-500">Sunny Island trial. Recordings stay in this browser.<br /><a href={`${import.meta.env.BASE_URL}audio/vendor/licenses/`} className="text-blue-700 underline" target="_blank" rel="noreferrer">Audio credits</a></p>}
+        </>}>
           <EnsembleMixerPanel
+            expandRoleMap={mobileLayout && mobilePanel === 'roles'}
             mode={practiceMode}
             onModeChange={(mode) => { setPracticeMode(mode); setIsAudioMuted(false); audioEngineRef.current?.setAudioBackingMuted(false); }}
             selectedRoles={selectedRoles}
@@ -1961,15 +1988,26 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               audioEngineRef.current?.setBackingVolumePercent(vol);
             }}
           />
-        </div>
-      </div>
+      </ResponsivePracticePanel>
+
+      <MobilePracticeToolbar playing={playbackPhase !== 'idle'} preparing={preparingAudio}
+        bpm={Math.round(currentBpm / pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator))}
+        backing={practiceMode === 'own' ? 'My part' : practiceMode === 'instruments' ? 'Instruments' : selectedRoles
+          .filter(role => !(myPartId && currentTexture?.[role].includes(myPartId)))
+          .map(role => role === 'melody' ? 'Melody' : role === 'countermelody' ? 'Countermelody' : 'Accompaniment').join(' + ') || 'Select lines'}
+        mutedClick={isMetronomeMuted} blocked={mobileLayout && mobilePanel !== null}
+        onPlay={() => { setActiveNavTab('score'); if (playbackPhase !== 'idle') handleFinishPlayback(); else handleStartPractice(); }}
+        onRestart={handleRestartPlayback}
+        onTempo={bpm => handleBpmChange(Math.max(30, Math.min(260, bpm * pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator))))}
+        onClick={() => { setIsMetronomeMuted(prev => !prev); audioEngineRef.current?.setMetronomeMuted(!isMetronomeMuted); }}
+        onPractice={() => setMobilePanel('practice')} onMore={() => setMobilePanel('more')} />
 
       {/* ------------------------------------------------------------------ */}
       {/* Post-Take Review Modal (Watch/Listen & Submit to Teacher) */}
       {/* ------------------------------------------------------------------ */}
       {showTakeModal && recentTake && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl border border-amber-300 dark:border-slate-700 shadow-2xl p-6 flex flex-col gap-4">
+          <div className="aipc-take-dialog bg-white dark:bg-slate-900 w-full max-w-lg rounded-2xl border border-amber-300 dark:border-slate-700 shadow-2xl p-6 flex flex-col gap-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-2">
                 <span className="text-2xl">🎉</span>
