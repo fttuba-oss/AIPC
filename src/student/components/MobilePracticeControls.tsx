@@ -3,16 +3,18 @@ import { Play, Pause, RotateCcw, MoreHorizontal, ChevronUp, X } from 'lucide-rea
 
 export type MobilePanel = 'practice' | 'roles' | 'more' | null;
 export const MOBILE_PRACTICE_QUERY = '(max-width: 1023px), (any-pointer: coarse) and (max-width: 1400px)';
-export function useMobilePracticeLayout() {
-  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && matchMedia(MOBILE_PRACTICE_QUERY).matches);
+function usePracticeMedia(query: string) {
+  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && matchMedia(query).matches);
   useEffect(() => {
-    const media = matchMedia(MOBILE_PRACTICE_QUERY);
+    const media = matchMedia(query);
     const update = () => setMobile(media.matches);
     update(); media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
-  }, []);
+  }, [query]);
   return mobile;
 }
+export function useMobilePracticeLayout() { return usePracticeMedia(MOBILE_PRACTICE_QUERY); }
+export function useCompactPortraitScore() { return usePracticeMedia('(max-width: 560px) and (orientation: portrait)'); }
 
 export function MobilePracticeHeader({ title, part, section, onRoles, blocked }: {
   title: string; part: string; section: string; onRoles: () => void; blocked: boolean;

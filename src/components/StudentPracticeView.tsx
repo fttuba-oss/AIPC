@@ -18,7 +18,7 @@ import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartA
 import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
 import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
 import { splitCombinedScore } from '../utils/splitScoreParts';
-import { MobilePracticeHeader, MobilePracticeToolbar, ResponsivePracticePanel, useMobilePracticeLayout, type MobilePanel } from '../student/components/MobilePracticeControls';
+import { MobilePracticeHeader, MobilePracticeToolbar, ResponsivePracticePanel, useMobilePracticeLayout, useCompactPortraitScore, type MobilePanel } from '../student/components/MobilePracticeControls';
 import {
   MediaRecordingEngine,
   getOrCreateActiveSession,
@@ -73,6 +73,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   // Section Navigation & Practice Agenda State
   // ------------------------------------------------------------------
   const mobileLayout = useMobilePracticeLayout();
+  const densePortrait = useCompactPortraitScore();
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   useEffect(() => { if (!mobileLayout) setMobilePanel(null); }, [mobileLayout]);
   const [viewMode, setViewMode] = useState<'focus' | 'full'>('full');
@@ -1703,6 +1704,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               <div className="aipc-score-view-wrapper flex-1 overflow-auto min-h-0 relative">
                 <StudentScoreViewer
                   compact={mobileLayout}
+                  densePortrait={densePortrait}
                   xmlUrl={xmlUrl}
                   xmlContent={practiceXmlContent}
                   playbackStartBeat={startFromBeat}
@@ -1912,6 +1914,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
               value={Math.max(timelineStartSec, Math.min(totalDurationSec, playbackProgress))} onChange={e => handleTimelineScrub(+e.target.value)} className="block w-full mt-3 accent-blue-600" />
           </label>
           <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { handleRestartPlayback(); closeMobilePanel(); }}>Restart from beginning</button>
             <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('score'); }}>Score</button>
             {!trialMode && <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('plan'); }}>Practice plan</button>}
             <button type="button" onClick={() => { closeMobilePanel(); setActiveNavTab('recordings'); }}>My recordings</button>

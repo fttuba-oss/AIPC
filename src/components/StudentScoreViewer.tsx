@@ -16,6 +16,7 @@ interface StudentScoreViewerProps {
   xmlUrl?: string;
   xmlContent?: string | null;
   compact?: boolean;
+  densePortrait?: boolean;
   startMeasure: number;
   playbackStartBeat?: number | null;
   endMeasure: number;
@@ -54,6 +55,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   xmlUrl,
   xmlContent,
   compact = false,
+  densePortrait = false,
   startMeasure,
   playbackStartBeat,
   endMeasure,
@@ -84,6 +86,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
 
   const [zoom, setZoom] = useState<number>(0.90);
+  const engravingZoom = densePortrait ? 0.72 : compact ? 1.05 : zoom;
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [scoreData, setScoreData] = useState<ScorePlaybackData | null>(null);
@@ -304,10 +307,10 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     osmd.EngravingRules.PageTopMargin = 0;
     (window as any).osmd = osmd;
     osmd.EngravingRules.PageBottomMargin = 0;
-    osmd.EngravingRules.PageLeftMargin = compact ? 0.8 : 4;
-    osmd.EngravingRules.PageRightMargin = compact ? 0.8 : 4;
-    osmd.EngravingRules.MinimumDistanceBetweenSystems = 2.8;
-    osmd.EngravingRules.MinSkyBottomDistBetweenSystems = 1.8;
+    osmd.EngravingRules.PageLeftMargin = densePortrait ? 0.4 : compact ? 0.8 : 4;
+    osmd.EngravingRules.PageRightMargin = densePortrait ? 0.4 : compact ? 0.8 : 4;
+    osmd.EngravingRules.MinimumDistanceBetweenSystems = densePortrait ? 2.0 : 2.8;
+    osmd.EngravingRules.MinSkyBottomDistBetweenSystems = densePortrait ? 1.2 : 1.8;
     osmd.EngravingRules.StaffDistance = 4.8;
     osmd.EngravingRules.BetweenStaffDistance = 3.6;
     osmd.EngravingRules.TupletNumberLimitConsecutiveRepetitions = false;
@@ -336,7 +339,7 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
         await osmd.load(prepareScoreForDisplay(xmlText.replace(/&amp;amp;/g, '&amp;')));
         if (!isMounted) return;
         installWavyLineStaffFix(osmd);
-        osmd.zoom = compact ? 1.05 : zoom;
+        osmd.zoom = engravingZoom;
         applyVisibleParts(osmd, visiblePartsRef.current);
 
         // 1. First ensure OSMD is configured with full bounds so we parse the entire piece
@@ -469,9 +472,11 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
     // The mobile header supplies the title; use the paper for readable notation.
     osmd.setOptions({ drawTitle: !compact && !shouldFocus, drawSubtitle: !compact && !shouldFocus,
       drawComposer: !compact && !shouldFocus, drawPartNames: !compact || (visiblePartIds?.length ?? 1) > 1 });
-    osmd.EngravingRules.PageLeftMargin = compact ? 0.8 : 4;
-    osmd.EngravingRules.PageRightMargin = compact ? 0.8 : 4;
-    osmd.zoom = compact ? 1.05 : zoom;
+    osmd.EngravingRules.PageLeftMargin = densePortrait ? 0.4 : compact ? 0.8 : 4;
+    osmd.EngravingRules.PageRightMargin = densePortrait ? 0.4 : compact ? 0.8 : 4;
+    osmd.EngravingRules.MinimumDistanceBetweenSystems = densePortrait ? 2.0 : 2.8;
+    osmd.EngravingRules.MinSkyBottomDistBetweenSystems = densePortrait ? 1.2 : 1.8;
+    osmd.zoom = engravingZoom;
 
     try {
       osmd.render();
@@ -483,17 +488,17 @@ export const StudentScoreViewer: React.FC<StudentScoreViewerProps> = ({
       setErrorMsg('The score could not be redrawn. Please reload and try again.');
       trackerAnchorsRef.current = [];
     }
-  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads, compact]);
+  }, [startMeasure, endMeasure, activeViewMode, isCoachModeActive, isLoaded, refreshCachedNoteheads, compact, densePortrait, engravingZoom]);
 
   // 3. Zoom updates
   useEffect(() => {
     if (osmdRef.current && isLoaded) {
-      osmdRef.current.zoom = compact ? 1.05 : zoom;
+      osmdRef.current.zoom = engravingZoom;
       osmdRef.current.render();
       refreshCachedNoteheads();
       osmdRef.current.cursor?.hide();
     }
-  }, [zoom, compact, isLoaded, refreshCachedNoteheads]);
+  }, [engravingZoom, isLoaded, refreshCachedNoteheads]);
 
   // Rebuild cached coordinates after notation, zoom, visibility or container-size changes.
   useEffect(() => {
