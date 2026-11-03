@@ -64,8 +64,8 @@ export class VscoPercussion {
       if (!loop && offset >= buffer.duration) return;
       const player = new Tone.Player({ url: buffer, fadeOut: loop ? 0.12 : 0.04, loop });
       const hitLevel = expressive && !note.percussionRoll ? level * (note.velocity ?? REFERENCE_DYNAMIC) / REFERENCE_DYNAMIC : level;
-      // Tam-tam has a powerful, long resonance: keep it quietly behind the band.
-      const familyTrimDb = family === 'tam-tam' ? -18 : 0;
+      // Bring out the bass-drum pulse; keep the tam-tam's long resonance behind the band.
+      const familyTrimDb = family === 'tam-tam' ? -18 : family === 'bass-drum' ? 6 : 0;
       player.volume.value = -6 + familyTrimDb + 20 * Math.log10(Math.max(0.001, Math.min(4, hitLevel / Math.max(0.25, layer.velocity))));
       if (note.percussionRoll && expressive) {
         const gain = new Tone.Gain(this.expressionValues.get(id) ?? 1).connect(this.destinations.get(id)!);
