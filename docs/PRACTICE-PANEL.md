@@ -6,6 +6,8 @@ The persistent panel beside the score provides three modes:
 - **With a musical line:** select any combination of melody, countermelody/supporting lines and accompaniment. Instrument groups follow the saved annotations as playback or seeking changes section.
 - **Choose instruments:** keep fixed instrument selections throughout the piece, with whole-band toggle, clear selection, individual volume and optional staff visibility.
 
+The first card in that mode is **Percussion rhythm section**: one checkbox and section preview, covering unpitched percussion such as snare, bass drum and cymbals. It is a practice grouping, so it stays available regardless of the student's musical role; the student's own part is excluded from the backing roster and preview. Timpani, pitched percussion and mixed pitched/unpitched tracks are excluded. It also works without musical-role annotations, using the practice range for previews. Selecting it alongside Accompaniment forms a union of parts, so overlapping parts do not play twice. It is listed first without being enabled by default.
+
 **Hear my part** controls the student's reference independently of backing selection. **Reference audio** mutes all reference sound; the metronome remains independent. Automatic balance continues to reduce doubling/density within the audible selection.
 
 The student's current musical role is disabled in musical-line mode, with the explanation “You play this line.” Previously selected lines are suspended while the student carries them and resume when roles change. This applies to playback and previews as well as the controls and listening summary. To hear other instruments doubling the student's line, use instrument mode.

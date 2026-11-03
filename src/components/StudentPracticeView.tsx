@@ -16,7 +16,7 @@ import { EnsembleMixerPanel, type InstrumentTrack } from '../student/components/
 import { StudentAcousticInput } from '../utils/studentAcousticInput';
 import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartAndNotes, type ScorePlaybackData, type NoteEvent } from '../utils/scorePlaybackParser';
 import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
-import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
+import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, unpitchedPercussionPartIds, type PracticeMode, type PracticeLine } from '../utils/practiceTexture';
 import { splitCombinedScore } from '../utils/splitScoreParts';
 import { useScreenWakeLock } from '../utils/useScreenWakeLock';
 import { MobilePracticeHeader, MobilePracticeToolbar, ResponsivePracticePanel, useMobilePracticeLayout, useCompactPortraitScore, type MobilePanel } from '../student/components/MobilePracticeControls';
@@ -186,11 +186,11 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   const [isMinusOneActive, setIsMinusOneActive] = useState<boolean>(false);
   const [automaticBalance, setAutomaticBalance] = useState(false);
   const [practiceMode, setPracticeMode] = useState<PracticeMode>('own');
-  const [selectedRoles, setSelectedRoles] = useState<TextureRole[]>(['melody']);
+  const [selectedRoles, setSelectedRoles] = useState<PracticeLine[]>(['melody']);
   const splitScore = useMemo(() => splitCombinedScore(xmlContent), [xmlContent]);
   const practiceXmlContent = splitScore.xml;
   const textureSpans = useMemo(() => expandTextureParts(textureForScore(xmlContent), splitScore.parts), [xmlContent, splitScore]);
-  const [previewRole, setPreviewRole] = useState<TextureRole | null>(null);
+  const [previewRole, setPreviewRole] = useState<PracticeLine | null>(null);
   const previewEngineRef = useRef<StudentAudioEngine | null>(null);
   const stopPreview = useCallback(() => {
     previewEngineRef.current?.stop();
@@ -299,6 +299,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   }, [tracks, myPartId, isMinusOneActive, playbackPhase, automaticBalance, practiceMode]);
   const [countInNumber, setCountInNumber] = useState<number | null>(null);
   const [scorePlaybackData, setScorePlaybackData] = useState<ScorePlaybackData | null>(null);
+  const percussionIds = useMemo(() => unpitchedPercussionPartIds(scorePlaybackData?.parts || []), [scorePlaybackData]);
 
   const totalScoreMeasures = useMemo(() => {
     if (scorePlaybackData?.measureStartBeats?.length) {
@@ -387,17 +388,18 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     return partRoleSegments(textureSpans, myPartId, active);
   }, [scorePlaybackData, textureSpans, myPartId]);
 
-  const activeTexturePartIds = useMemo(() => currentTexture ? (scorePlaybackData?.parts || [])
-    .filter(part => part.notes.some(note => note.measureNumber >= currentTexture.start && note.measureNumber <= currentTexture.end))
-    .map(part => part.id) : [], [currentTexture, scorePlaybackData]);
+  const percussionRange = currentTexture ?? { start: activeMeasureRange[0], end: activeMeasureRange[1] };
+  const activeTexturePartIds = useMemo(() => (scorePlaybackData?.parts || [])
+    .filter(part => part.notes.some(note => note.measureNumber >= percussionRange.start && note.measureNumber <= percussionRange.end))
+    .map(part => part.id), [percussionRange.start, percussionRange.end, scorePlaybackData]);
   const barStartBeat = scorePlaybackData?.measureStartBeatByNumber?.[practiceMeasure]
     ?? scorePlaybackData?.measureStartBeats[practiceMeasure - 1] ?? practiceBeat;
   const barEndBeat = scorePlaybackData?.measureStartBeatByNumber?.[practiceMeasure + 1]
     ?? scorePlaybackData?.measureStartBeats[practiceMeasure] ?? Infinity;
   const ownPartResting = !!scorePlaybackData && !scorePlaybackData.parts.find(part => part.id === myPartId)
     ?.notes.some(note => note.beat < barEndBeat && note.beat + note.durationBeats > barStartBeat);
-  const selectionRef = useRef({ practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat });
-  selectionRef.current = { practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat };
+  const selectionRef = useRef({ practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat, percussionIds });
+  selectionRef.current = { practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat, percussionIds };
 
 
   // Input Mode (Acoustic Mic vs iPad Screen Tap Pad)
@@ -599,25 +601,28 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     audioEngineRef.current?.setPartSelection((id, beat) => {
       const state = selectionRef.current;
       return selectedPracticePart(state.practiceMode, state.selectedRoles,
-        textureAtMeasure(state.textureSpans, state.measureAtBeat(beat)), id, state.myPartId, true);
+        textureAtMeasure(state.textureSpans, state.measureAtBeat(beat)), id, state.myPartId, true, state.percussionIds);
     });
-  }, [practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat]);
+  }, [practiceMode, selectedRoles, textureSpans, myPartId, measureAtBeat, percussionIds]);
 
   useEffect(() => { stopPreview(); }, [practiceMode, myPartId, practiceMeasure, selectedRoles, stopPreview]);
 
-  const handlePreviewLine = async (role: TextureRole) => {
+  const handlePreviewLine = async (role: PracticeLine) => {
     if (previewRole === role) { stopPreview(); return; }
-    if (!scorePlaybackData || !currentTexture || playbackPhase !== 'idle' || preparingAudio
-      || (myPartId && currentTexture[role].includes(myPartId))) return;
+    const range = currentTexture ?? (role === 'percussion' ? percussionRange : undefined);
+    const partIds = role === 'percussion' ? percussionIds : currentTexture?.[role] || [];
+    if (!scorePlaybackData || !range || playbackPhase !== 'idle' || preparingAudio
+      || (role !== 'percussion' && myPartId && currentTexture?.[role].includes(myPartId))
+      || !partIds.some(id => id !== myPartId)) return;
     stopPreview();
     const engine = previewEngineRef.current ??= new StudentAudioEngine();
-    const start = scorePlaybackData.measureStartBeatByNumber?.[currentTexture.start]
-      ?? scorePlaybackData.measureStartBeats[currentTexture.start - 1] ?? 0;
-    const end = scorePlaybackData.measureStartBeatByNumber?.[currentTexture.end + 1]
-      ?? scorePlaybackData.measureStartBeats[currentTexture.end]
+    const start = scorePlaybackData.measureStartBeatByNumber?.[range.start]
+      ?? scorePlaybackData.measureStartBeats[range.start - 1] ?? 0;
+    const end = scorePlaybackData.measureStartBeatByNumber?.[range.end + 1]
+      ?? scorePlaybackData.measureStartBeats[range.end]
       ?? scorePlaybackData.metronomeMeasures?.at(-1)?.endBeat
       ?? secondsToBeats(scorePlaybackData.durationInSeconds, scorePlaybackData.tempos);
-    const notes = scorePlaybackData.parts.filter(part => part.id !== myPartId && currentTexture[role].includes(part.id))
+    const notes = scorePlaybackData.parts.filter(part => part.id !== myPartId && partIds.includes(part.id))
       .flatMap(part => part.notes.map(note => ({ ...note, partId: part.id, instrument: mapInstrumentToSoundfont(part.name) })));
     engine.setPartMix(Object.fromEntries(scoreParts.map(part => [part.id, 1])));
     engine.setAutomaticBalance(automaticBalance);
@@ -629,7 +634,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
     const meter = meterAtBeat(scorePlaybackData.metronomeMeasures || [], start, scorePlaybackData.initialTimeSignature);
     try {
       await engine.startSectionPlayback({ notes, startBeat: start, startFromBeat: start,
-        totalBeats: Math.max(0.01, end - start), startMeasure: currentTexture.start, endMeasure: currentTexture.end,
+        totalBeats: Math.max(0.01, end - start), startMeasure: range.start, endMeasure: range.end,
         timeSignature: [meter.numerator, meter.denominator], countInBeats: 0,
         tempos: scorePlaybackData.tempos, dynamics: scorePlaybackData.dynamics,
         metronomeMeasures: scorePlaybackData.metronomeMeasures }, tempoPreset === 'custom' ? currentBpm
@@ -1932,6 +1937,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
             selectedRoles={selectedRoles}
             onRoleToggle={(role) => setSelectedRoles(prev => prev.includes(role) ? prev.filter(r => r !== role) : [...prev, role])}
             texture={currentTexture}
+            percussionPartIds={percussionIds}
+            percussionRange={percussionRange}
             textureSections={textureSpans || []}
             roleSegments={roleSegments}
             extractionReviewBars={splitScore.parts.find(part => part.id === myPartId)?.reviewBars || []}
@@ -1999,8 +2006,8 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
       <MobilePracticeToolbar playing={playbackPhase !== 'idle'} preparing={preparingAudio}
         bpm={Math.round(currentBpm / pulseQuarterNotes(displayedMeter.numerator, displayedMeter.denominator))}
         backing={practiceMode === 'own' ? 'My part' : practiceMode === 'instruments' ? 'Instruments' : selectedRoles
-          .filter(role => !(myPartId && currentTexture?.[role].includes(myPartId)))
-          .map(role => role === 'melody' ? 'Melody' : role === 'countermelody' ? 'Countermelody' : 'Accompaniment').join(' + ') || 'Select lines'}
+          .filter(role => role === 'percussion' ? percussionIds.some(id => id !== myPartId) : !!currentTexture && !(myPartId && currentTexture[role].includes(myPartId)))
+          .map(role => role === 'percussion' ? 'Percussion' : role === 'melody' ? 'Melody' : role === 'countermelody' ? 'Countermelody' : 'Accompaniment').join(' + ') || 'Select lines'}
         mutedClick={isMetronomeMuted} blocked={mobileLayout && mobilePanel !== null}
         onPlay={() => { setActiveNavTab('score'); if (playbackPhase !== 'idle') handleFinishPlayback(); else handleStartPractice(); }}
         onRestart={handleRestartPlayback}

@@ -3,6 +3,12 @@
  */
 export type PracticeMode = 'own' | 'lines' | 'instruments';
 export type TextureRole = 'melody' | 'countermelody' | 'accompaniment';
+export type PracticeLine = TextureRole | 'percussion';
+/** A practice grouping, not a musical role. Never include pitched/mixed tracks. */
+export function unpitchedPercussionPartIds(parts: readonly { id: string; name: string; notes: readonly { percussion?: number }[] }[]): string[] {
+  return parts.filter(part => !/timpani|glockenspiel|xylophone|marimba|vibraphone|tubular|chimes|crotales|celesta/i.test(part.name)
+    && part.notes.length > 0 && part.notes.every(note => note.percussion !== undefined)).map(part => part.id);
+}
 export interface TextureSpan {
   start: number; end: number; label: string;
   melody: string[]; countermelody: string[]; accompaniment: string[];
@@ -93,14 +99,14 @@ export function expandTextureParts(spans: TextureSpan[] | null, parts: { sourceI
     return result;
   });
 }
-/** Keep saved choices, but suspend a line whenever the student carries it. */
-export function availablePracticeRoles(roles: TextureRole[], span: TextureSpan | undefined, ownPart: string | null): TextureRole[] {
-  return roles.filter(role => !ownPart || !span?.[role].includes(ownPart));
+/** Suspend the student's musical role; the percussion practice grouping stays available. */
+export function availablePracticeRoles(roles: PracticeLine[], span: TextureSpan | undefined, ownPart: string | null): PracticeLine[] {
+  return roles.filter(role => role === 'percussion' || !ownPart || !span?.[role].includes(ownPart));
 }
-export function selectedPracticePart(mode: PracticeMode, roles: TextureRole[], span: TextureSpan | undefined,
-  partId: string, ownPart: string | null, instrumentEnabled: boolean): boolean {
+export function selectedPracticePart(mode: PracticeMode, roles: PracticeLine[], span: TextureSpan | undefined,
+  partId: string, ownPart: string | null, instrumentEnabled: boolean, percussionIds: readonly string[] = []): boolean {
   if (partId === ownPart || ownPart === null) return true; // With no part list, the caller supplies only the own-part fallback.
   if (mode === 'own') return false;
   if (mode === 'instruments') return instrumentEnabled;
-  return availablePracticeRoles(roles, span, ownPart).some(role => span?.[role].includes(partId));
+  return availablePracticeRoles(roles, span, ownPart).some(role => role === 'percussion' ? percussionIds.includes(partId) : span?.[role].includes(partId));
 }

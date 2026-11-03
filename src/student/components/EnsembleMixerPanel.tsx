@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Volume2, Eye, EyeOff, ChevronDown, ChevronUp } from 'lucide-react';
-import type { PracticeMode, TextureRole, TextureSpan, PartRoleSegment } from '../../utils/practiceTexture';
+import type { PracticeMode, TextureRole, PracticeLine, TextureSpan, PartRoleSegment } from '../../utils/practiceTexture';
 import { availablePracticeRoles } from '../../utils/practiceTexture';
 
 export interface InstrumentTrack {
@@ -29,16 +29,18 @@ interface EnsembleMixerPanelProps {
   onMasterVolumeChange: (volume: number) => void;
   mode: PracticeMode;
   onModeChange: (mode: PracticeMode) => void;
-  selectedRoles: TextureRole[];
-  onRoleToggle: (role: TextureRole) => void;
+  selectedRoles: PracticeLine[];
+  onRoleToggle: (role: PracticeLine) => void;
   texture?: TextureSpan;
   hasTexture: boolean;
+  percussionPartIds: string[];
+  percussionRange: { start: number; end: number };
   textureSections: TextureSpan[];
   roleSegments: PartRoleSegment[];
   onSectionSeek: (measure: number) => void;
   measure: number;
-  onPreview: (role: TextureRole) => void;
-  previewRole: TextureRole | null;
+  onPreview: (role: PracticeLine) => void;
+  previewRole: PracticeLine | null;
   canPreview: boolean;
   activeTexturePartIds: string[];
   ownPartResting: boolean;
@@ -55,7 +57,7 @@ const accompanimentFamily = (name: string): string => {
   if (/sax/i.test(name)) return 'Saxophones';
   return name;
 };
-const roleName = (role: TextureRole, texture?: TextureSpan) => role === 'melody' ? 'Melody'
+const roleName = (role: PracticeLine, texture?: TextureSpan) => role === 'percussion' ? 'Percussion rhythm section' : role === 'melody' ? 'Melody'
   : role === 'accompaniment' ? 'Accompaniment' : texture?.secondaryLabel || 'Countermelody';
 
 export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
@@ -69,9 +71,11 @@ export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
   }, [p.expandRoleMap, p.roleSegments.length]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const ownName = p.parts?.find(part => part.id === p.myPartId)?.name || p.userInstrument;
-  const names = (role: TextureRole) => p.tracks.filter(t => t.id !== p.myPartId && p.activeTexturePartIds.includes(t.id) && p.texture?.[role].includes(t.id)).map(t => t.name);
+  const names = (role: PracticeLine) => p.tracks.filter(t => t.id !== p.myPartId && p.activeTexturePartIds.includes(t.id) && (role === 'percussion' ? p.percussionPartIds : p.texture?.[role] || []).includes(t.id)).map(t => t.name);
   const backingNames = p.tracks.filter(t => t.id !== p.myPartId && !t.isMuted).map(t => t.name);
-  const heard = p.mode === 'own' ? [] : p.mode === 'lines' ? availablePracticeRoles(p.selectedRoles, p.texture, p.myPartId ?? null).map(r => roleName(r, p.texture)) : backingNames;
+  const heard = p.mode === 'own' ? [] : p.mode === 'lines' ? availablePracticeRoles(p.selectedRoles, p.texture, p.myPartId ?? null)
+    .filter(role => role === 'percussion' ? p.percussionPartIds.some(id => id !== p.myPartId) : p.hasTexture)
+    .map(r => roleName(r, p.texture)) : backingNames;
   const roleSegment = p.roleSegments.find(s => p.measure >= s.start && p.measure <= s.end);
   const nextRoleSegment = roleSegment && p.roleSegments[p.roleSegments.indexOf(roleSegment) + 1];
   const ownRole = roles.find(r => p.myPartId && p.texture?.[r].includes(p.myPartId));
@@ -105,36 +109,39 @@ export const EnsembleMixerPanel: React.FC<EnsembleMixerPanelProps> = (p) => {
       <fieldset className="space-y-4"><legend className="sr-only">Practice options</legend>
         {(['own', 'lines', 'instruments'] as PracticeMode[]).map(mode => <div key={mode}>
           <label className="flex items-center gap-3 font-semibold text-sm cursor-pointer">
-            <input type="radio" name="practice-mode" value={mode} checked={p.mode === mode} disabled={mode === 'lines' && !p.hasTexture} onChange={() => p.onModeChange(mode)} className="accent-blue-600" />
+            <input type="radio" name="practice-mode" value={mode} checked={p.mode === mode} disabled={mode === 'lines' && !p.hasTexture && !p.percussionPartIds.length} onChange={() => p.onModeChange(mode)} className="accent-blue-600" />
             {mode === 'own' ? 'My part only' : mode === 'lines' ? 'With a musical line' : 'Choose instruments'}
           </label>
           {mode === 'own' && p.mode === mode && <p className="ml-6 mt-2 text-xs text-slate-500">Your reference sound, with optional metronome.</p>}
-          {mode === 'lines' && !p.hasTexture && <p className="ml-6 mt-2 text-xs text-slate-500">Musical-line analysis is not available for this score yet. Choose instruments below.</p>}
+          {mode === 'lines' && !p.hasTexture && <p className="ml-6 mt-2 text-xs text-slate-500">Musical-line analysis is not available for this score yet. {p.percussionPartIds.length ? 'You can use the percussion rhythm section.' : 'Choose instruments below.'}</p>}
           {mode === 'lines' && p.mode === mode && <div className="mt-3 space-y-2">
-            <label className="block text-xs font-semibold text-slate-600">Practice section
+            {p.hasTexture && <label className="block text-xs font-semibold text-slate-600">Practice section
               <select aria-label="Practice section" value={p.texture?.start ?? ''} onChange={e => p.onSectionSeek(+e.target.value)} className="mt-1 block w-full rounded-lg bg-slate-100 p-2 text-slate-900">
                 {p.textureSections.map(section => <option key={section.start} value={section.start}>{section.label} · Bars {section.start}–{section.end}</option>)}
               </select>
-            </label>
+            </label>}
             <p className="text-xs text-slate-500">Previews play this whole section without moving your tracker.</p>
-            {roles.map(role => {
-              const instruments = names(role); const isOwnRole = role === ownRole;
-              const selected = !isOwnRole && p.selectedRoles.includes(role);
+            {(['percussion', ...roles] as PracticeLine[]).map(role => {
+              const instruments = names(role); const isOwnRole = role !== 'percussion' && role === ownRole;
+              const unavailable = isOwnRole || (role !== 'percussion' && !p.hasTexture) || (role === 'percussion' && !p.percussionPartIds.some(id => id !== p.myPartId));
+              const range = role === 'percussion' ? p.percussionRange : p.texture;
+              const selected = !unavailable && p.selectedRoles.includes(role);
               return <div key={role} className={`rounded-xl border p-3 ${selected ? 'border-blue-500 bg-blue-50' : 'border-slate-200'}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <label className={`flex items-center gap-2 text-sm font-semibold ${isOwnRole ? 'text-slate-400' : 'cursor-pointer'}`}><input type="checkbox" disabled={isOwnRole} className="accent-blue-600" checked={selected} onChange={() => p.onRoleToggle(role)} />{roleName(role, p.texture)}</label>
-                  <button type="button" disabled={isOwnRole || !p.canPreview || instruments.length === 0} onClick={() => p.onPreview(role)} aria-label={`Preview ${roleName(role, p.texture)}`} className="text-xs text-blue-700 disabled:text-slate-400 flex items-center gap-1"><Volume2 size={13} />{p.previewRole === role ? 'Stop' : 'Preview section'}</button>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className={`flex items-center gap-2 text-sm font-semibold ${unavailable ? 'text-slate-400' : 'cursor-pointer'}`}><input type="checkbox" disabled={unavailable} className="accent-blue-600" checked={selected} onChange={() => p.onRoleToggle(role)} />{roleName(role, p.texture)}</label>
+                  <button type="button" disabled={unavailable || !p.canPreview || instruments.length === 0} onClick={() => p.onPreview(role)} aria-label={`Preview ${roleName(role, p.texture)}`} className="text-xs text-blue-700 disabled:text-slate-400 flex items-center gap-1"><Volume2 size={13} />{p.previewRole === role ? 'Stop' : 'Preview section'}</button>
                 </div>
                 {isOwnRole && <p className="mt-2 text-xs font-medium text-slate-500">You play this line. Use “Hear my part” for your reference.</p>}
-                {p.texture && <p className="mt-2 text-xs font-medium text-slate-500">{p.previewRole === role ? 'Previewing' : 'Section'}: Bars {p.texture.start}–{p.texture.end}</p>}
+                {role === 'percussion' && <p className="mt-2 text-xs text-slate-500">Practise with the percussion pulse.</p>}
+                {range && <p className="mt-2 text-xs font-medium text-slate-500">{p.previewRole === role ? 'Previewing' : 'Section'}: Bars {range.start}–{range.end}</p>}
                 <p className="mt-2 text-xs leading-relaxed text-slate-600">{(role === 'accompaniment'
                   ? [...new Set(p.tracks.filter(t => instruments.includes(t.name)).map(t => t.section === 'Percussion' ? 'Percussion' : accompanimentFamily(t.name)))].join(' · ')
                   : instruments.join(' · ')) || 'No other parts in this line here'}</p>
                 {role === 'accompaniment' && instruments.length > 0 && <details className="mt-2 text-xs text-slate-500"><summary className="cursor-pointer">Show instruments</summary><p className="mt-1 leading-relaxed">{instruments.join(' · ')}</p></details>}
               </div>;
             })}
-            <p className="text-xs text-slate-500">Follows the musical line when instruments change. Your part is controlled separately.</p>
-            <p className="text-xs text-slate-500">Based on the saved score analysis. Supporting lines may include replies and decorations.</p>
+            <p className="text-xs text-slate-500">{p.hasTexture ? 'Musical lines follow changing instruments. ' : ''}Your part is controlled separately.</p>
+            {p.hasTexture && <p className="text-xs text-slate-500">Musical-line roles use the saved score analysis. Supporting lines may include replies and decorations.</p>}
           </div>}
           {mode === 'instruments' && p.mode === mode && <div className="mt-3 space-y-3">
             <div className="flex gap-2"><button type="button" onClick={p.onPlayAllParts} aria-pressed={backingNames.length > 0 && backingNames.length === p.tracks.filter(t => t.id !== p.myPartId).length} className="flex-1 rounded-lg bg-blue-50 text-blue-700 p-2 text-xs font-semibold">Whole band</button><button type="button" onClick={p.onClearParts} className="rounded-lg border border-slate-200 p-2 text-xs">Clear selection</button></div>
