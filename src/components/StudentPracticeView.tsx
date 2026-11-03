@@ -18,6 +18,7 @@ import { beatToSeconds, secondsToBeats, mapInstrumentToSoundfont, getTargetPartA
 import { listScoreParts, matchPartToInstrument } from '../utils/scoreParts';
 import { textureForScore, textureAtMeasure, partRoleSegments, selectedPracticePart, expandTextureParts, type PracticeMode, type TextureRole } from '../utils/practiceTexture';
 import { splitCombinedScore } from '../utils/splitScoreParts';
+import { useScreenWakeLock } from '../utils/useScreenWakeLock';
 import { MobilePracticeHeader, MobilePracticeToolbar, ResponsivePracticePanel, useMobilePracticeLayout, useCompactPortraitScore, type MobilePanel } from '../student/components/MobilePracticeControls';
 import {
   MediaRecordingEngine,
@@ -283,6 +284,7 @@ export const StudentPracticeView: React.FC<StudentPracticeViewProps> = ({
   // Practice & Playback state
   const [countInTotal, setCountInTotal] = useState(4);
   const [playbackPhase, setPlaybackPhase] = useState<'idle' | 'count_in' | 'playing' | 'review'>('idle');
+  useScreenWakeLock(playbackPhase === 'count_in' || playbackPhase === 'playing' || previewRole !== null);
 
   // Push the "Practise with" mix to the engine: ticked parts sound at their slider level,
   // unticked parts are silent, and my own part is silent while "Mute my part" is on (but heard in a demo).

@@ -67,3 +67,9 @@ OSMD 2.1.2 has a cross-system wavy/trill-line calculation that indexes visible s
 Session storage falls back to memory when localStorage access is denied, so a restricted browser context can still practise. Those sessions are not guaranteed to persist after reload. The student HTML has a module-load failure message; the React startup boundary reports render failures with reload/error details. Score loading/redraw failures also have visible status messages. These measures address reproducible failure paths; an unverified device-specific blank screen still needs the iPadOS/browser version and failing URL. Safari/WebKit could not be installed in this execution environment, so the tablet checks use Chromium touch emulation.
 
 The C portrait layout is restored automatically after rotating back from landscape, without changing the selected part or musical position.
+
+## Keep the screen awake during playback
+
+The student viewer requests the browser's Screen Wake Lock during count-in, score playback and musical-line previews. It releases the lock when playback/preview stops, when the page is hidden, or on unmount. Returning to the visible page requests it again if practice is still active. Idle score viewing does not hold a lock.
+
+This uses the native API on HTTPS (or localhost). Browser/device support and operating-system battery policy determine whether a request succeeds or a lock is released. Rejection or an unavailable API never interrupts the music. There is no fake-video fallback or change to the device's permanent auto-lock setting. Tests cover background/foreground transitions, pending request cleanup and denial; browser checks verify that the actual playback and preview controls acquire/release their locks.
