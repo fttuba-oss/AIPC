@@ -6,6 +6,14 @@ export function notationPlacement(voice: string, voices: string[]): 'above' | 'b
 export function prepareScoreForDisplay(xml: string): string {
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length) throw new Error('The score contains invalid MusicXML.');
+  // Sunny Island's opening heading includes a separate printed "(~80)" hint.
+  // Remove that hint only; retain Andante, the metronome mark and sound tempo.
+  for (const direction of Array.from(doc.getElementsByTagName('direction'))) {
+    const words = Array.from(direction.getElementsByTagName('words'));
+    if (!words.some(w => /Infinite Dreams/i.test(w.textContent || '')) || !words.some(w => /^~\s*80\s*\)$/.test((w.textContent || '').trim()))) continue;
+    for (const word of words) if (/^(?:\(|~\s*80\s*\))$/.test((word.textContent || '').trim())) word.remove();
+    for (const type of Array.from(direction.children)) if (type.localName === 'direction-type' && !type.children.length) type.remove();
+  }
   for (const part of Array.from(doc.getElementsByTagName('part'))) {
     const staffVoices = new Map<string, Set<string>>();
     const notes = Array.from(part.getElementsByTagName('note'));
